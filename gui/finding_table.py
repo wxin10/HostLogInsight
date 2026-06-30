@@ -13,7 +13,7 @@ class FindingTable(QTableWidget):
         super().__init__(0, 8)
         self.findings: list[Finding] = []
         self.visible_findings: list[Finding] = []
-        self.setHorizontalHeaderLabels(["Time", "Severity", "Type", "User", "Source IP", "Source", "Description", "Confidence"])
+        self.setHorizontalHeaderLabels(["时间", "等级", "类型", "用户", "源 IP", "来源", "描述", "置信度"])
         self.horizontalHeader().setStretchLastSection(True)
         self.itemSelectionChanged.connect(self._emit_selected)
 

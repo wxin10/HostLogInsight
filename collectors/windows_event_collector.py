@@ -10,6 +10,9 @@ from core.time_range import TimeRange
 from parsers.windows_event_parser import WindowsEventParser
 
 
+POWERSHELL_UTF8_PREFIX = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;"
+
+
 class WindowsEventCollector(Collector):
     def collect(self, sources: list[LogSource], time_range: TimeRange) -> list[LogEvent]:
         events: list[LogEvent] = []
@@ -28,6 +31,8 @@ class WindowsEventCollector(Collector):
         start = time_range.start_time.strftime("%Y-%m-%dT%H:%M:%S")
         end = time_range.end_time.strftime("%Y-%m-%dT%H:%M:%S")
         script = (
+            POWERSHELL_UTF8_PREFIX
+            + 
             "$ErrorActionPreference='Stop';"
             f"$filter=@{{LogName='{source.channel}'; StartTime=[datetime]'{start}'; EndTime=[datetime]'{end}'}};"
             "Get-WinEvent -FilterHashtable $filter -MaxEvents 2000 -ErrorAction Stop | Select-Object TimeCreated,Id,ProviderName,LogName,LevelDisplayName,Message | ConvertTo-Json -Compress"
@@ -35,9 +40,9 @@ class WindowsEventCollector(Collector):
         code, out, err = run_command(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], timeout=120)
         if code != 0:
             message = err or out or "Get-WinEvent failed."
-            if "No events were found" in message or "NoMatchingEventsFound" in message:
-                source.status = "available"
-                source.error_message = "No events found in selected time range."
+            if self._is_empty_or_missing_channel(message):
+                source.status = "skipped"
+                source.error_message = self._friendly_channel_message(source, message)
             else:
                 self.mark_error(source, "unavailable", message.strip())
             return []
@@ -65,9 +70,12 @@ class WindowsEventCollector(Collector):
             return []
         start = time_range.start_time.strftime("%Y-%m-%dT%H:%M:%S")
         end = time_range.end_time.strftime("%Y-%m-%dT%H:%M:%S")
+        evtx_path = source.path.replace("'", "''")
         script = (
+            POWERSHELL_UTF8_PREFIX
+            + 
             "$ErrorActionPreference='Stop';"
-            f"Get-WinEvent -Path '{source.path}' -ErrorAction Stop | Where-Object {{$_.TimeCreated -ge [datetime]'{start}' -and $_.TimeCreated -le [datetime]'{end}'}} | "
+            f"Get-WinEvent -Path '{evtx_path}' -ErrorAction Stop | Where-Object {{$_.TimeCreated -ge [datetime]'{start}' -and $_.TimeCreated -le [datetime]'{end}'}} | "
             "Select-Object TimeCreated,Id,ProviderName,LogName,LevelDisplayName,Message | ConvertTo-Json -Compress"
         )
         code, out, err = run_command(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], timeout=180)
@@ -91,3 +99,28 @@ class WindowsEventCollector(Collector):
         except Exception as exc:
             self.mark_error(source, "parse_error", str(exc))
         return events
+
+    def _is_empty_or_missing_channel(self, message: str) -> bool:
+        text = message.lower()
+        patterns = [
+            "nomatchingeventsfound",
+            "no events were found",
+            "objectnotfound",
+            "the specified channel could not be found",
+            "the specified resource type cannot be found",
+            "no event log on the localhost computer",
+            "找不到指定的日志",
+            "日志名称不存在",
+            "找不到指定的资源类型",
+            "cannot find",
+        ]
+        return any(pattern in text for pattern in patterns)
+
+    def _friendly_channel_message(self, source: LogSource, message: str) -> str:
+        name = (source.channel or source.name or "").lower()
+        if "sysmon" in name:
+            return "未安装或未启用 Sysmon。"
+        text = message.lower()
+        if "nomatchingeventsfound" in text or "no events were found" in text:
+            return "所选时间范围内没有事件。"
+        return "该事件通道不存在或当前系统未启用。"

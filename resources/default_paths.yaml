@@ -29,9 +29,6 @@ windows:
     - C:\tomcat\logs
     - C:\Program Files\Apache Software Foundation
     - C:\Program Files\Apache Tomcat
-    - C:\ProgramData
-    - C:\Windows\Temp
-    - C:\Temp
 linux:
   journal:
     - systemd-journal
@@ -73,11 +70,6 @@ linux:
     - /opt/tomcat/logs
     - /usr/local/tomcat/logs
     - /var/log/tomcat
-    - /opt
-    - /data
-    - /srv
-    - /www
-    - /var/www
   container_logs:
     - /var/log/containers
     - /var/log/pods

@@ -52,46 +52,67 @@ class SourceScanWorker(QObject):
             self.failed.emit(str(exc))
 
 
+class AnalysisWorker(QObject):
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, engine: AnalysisEngine, time_range: TimeRange, user_paths: list[str], sources: list | None) -> None:
+        super().__init__()
+        self.engine = engine
+        self.time_range = time_range
+        self.user_paths = user_paths
+        self.sources = sources
+
+    def run(self) -> None:
+        try:
+            result = self.engine.run(self.time_range, add_paths=self.user_paths, sources=self.sources)
+            self.finished.emit(result)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("HostLogInsight")
+        self.setWindowTitle("主机日志分析系统")
         self.engine = AnalysisEngine()
         self.time_range = TimeRange.from_last("24h")
         self.result = AnalysisResult()
         self.user_path_entries = load_user_path_entries()
         self.user_paths = [entry["path"] for entry in self.user_path_entries if entry.get("enabled", True)]
         self.scan_thread: QThread | None = None
+        self.analysis_thread: QThread | None = None
 
         self.status_label = QLabel()
-        self.risk_label = QLabel("Risk: 0/100")
+        self.risk_label = QLabel("风险: 0/100")
         self._build_toolbar()
         self._build_layout()
         self._refresh_status()
         self.rescan_sources()
 
     def _build_toolbar(self) -> None:
-        toolbar = QToolBar("Main")
+        toolbar = QToolBar("主工具栏")
         self.addToolBar(toolbar)
-        analyze_btn = QPushButton("Start Analysis")
-        analyze_btn.clicked.connect(self.run_analysis)
-        stop_btn = QPushButton("Stop Analysis")
-        stop_btn.setEnabled(False)
-        rescan_btn = QPushButton("Rescan Sources")
+        self.analyze_btn = QPushButton("开始分析")
+        self.analyze_btn.clicked.connect(self.run_analysis)
+        self.stop_btn = QPushButton("停止分析")
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self.stop_analysis)
+        rescan_btn = QPushButton("重新扫描日志源")
         rescan_btn.clicked.connect(self.rescan_sources)
-        add_file_btn = QPushButton("Add Log File")
+        add_file_btn = QPushButton("添加日志文件")
         add_file_btn.clicked.connect(self.add_file)
-        add_dir_btn = QPushButton("Add Log Directory")
+        add_dir_btn = QPushButton("添加日志目录")
         add_dir_btn.clicked.connect(self.add_directory)
-        add_glob_btn = QPushButton("Add Glob")
+        add_glob_btn = QPushButton("添加通配路径")
         add_glob_btn.clicked.connect(self.add_glob)
-        clear_btn = QPushButton("Clear Results")
+        clear_btn = QPushButton("清空结果")
         clear_btn.clicked.connect(self.clear_results)
-        save_btn = QPushButton("Save Session")
+        save_btn = QPushButton("保存会话")
         save_btn.clicked.connect(self.save_session)
-        history_btn = QPushButton("Open History")
+        history_btn = QPushButton("打开历史")
         history_btn.clicked.connect(self.open_history)
-        for widget in [analyze_btn, stop_btn, rescan_btn, add_file_btn, add_dir_btn, add_glob_btn, clear_btn, save_btn, history_btn, self.risk_label]:
+        for widget in [self.analyze_btn, self.stop_btn, rescan_btn, add_file_btn, add_dir_btn, add_glob_btn, clear_btn, save_btn, history_btn, self.risk_label]:
             toolbar.addWidget(widget)
 
     def _build_layout(self) -> None:
@@ -101,27 +122,27 @@ class MainWindow(QMainWindow):
 
         self.menu = QListWidget()
         for item in [
-            "Host Risk Overview",
-            "Log Source Management",
-            "Time Range Query",
-            "Windows Login Analysis",
-            "Windows Bruteforce Analysis",
-            "RDP Analysis",
-            "User and Privilege Changes",
-            "Service Analysis",
-            "Scheduled Task Analysis",
-            "PowerShell Analysis",
-            "Process and Command Analysis",
-            "Defender Analysis",
-            "Log Tamper Analysis",
-            "Linux SSH Analysis",
-            "Linux sudo/su Analysis",
-            "Linux User Privilege Analysis",
-            "Linux Persistence Analysis",
-            "Web Log Analysis",
-            "Database Log Analysis",
-            "Timeline",
-            "Settings",
+            "主机风险概览",
+            "日志源管理",
+            "时间范围查询",
+            "Windows 登录分析",
+            "Windows 暴力破解分析",
+            "远程桌面分析",
+            "用户与权限变更",
+            "服务分析",
+            "计划任务分析",
+            "PowerShell 分析",
+            "进程与命令分析",
+            "Defender 分析",
+            "日志篡改分析",
+            "Linux SSH 分析",
+            "Linux sudo/su 分析",
+            "Linux 用户权限分析",
+            "Linux 持久化分析",
+            "Web 日志分析",
+            "数据库日志分析",
+            "时间线",
+            "设置",
         ]:
             self.menu.addItem(item)
 
@@ -138,11 +159,15 @@ class MainWindow(QMainWindow):
         overview_layout = QVBoxLayout(overview_page)
         filter_layout = QHBoxLayout()
         self.severity_filter = QComboBox()
-        self.severity_filter.addItems(["all", "critical", "high", "medium", "low", "info"])
+        self.severity_filter.addItem("全部", "all")
+        for severity in ["critical", "high", "medium", "low", "info"]:
+            self.severity_filter.addItem(severity, severity)
         self.category_filter = QComboBox()
-        self.category_filter.addItems(["all", "authentication", "bruteforce", "rdp", "ssh", "privilege", "service", "task", "powershell", "process", "defender", "log_tamper", "web_attack", "database_attack", "persistence"])
+        self.category_filter.addItem("全部", "all")
+        for category in ["authentication", "bruteforce", "rdp", "ssh", "privilege", "service", "task", "powershell", "process", "defender", "log_tamper", "web_attack", "database_attack", "persistence"]:
+            self.category_filter.addItem(category, category)
         self.keyword_filter = QLineEdit()
-        self.keyword_filter.setPlaceholderText("Search findings")
+        self.keyword_filter.setPlaceholderText("搜索风险项")
         self.severity_filter.currentTextChanged.connect(self.apply_finding_filters)
         self.category_filter.currentTextChanged.connect(self.apply_finding_filters)
         self.keyword_filter.textChanged.connect(self.apply_finding_filters)
@@ -171,7 +196,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.timeline_view)
         settings_page = QWidget()
         settings_layout = QVBoxLayout(settings_page)
-        settings_btn = QPushButton("Open Settings")
+        settings_btn = QPushButton("打开设置")
         settings_btn.clicked.connect(lambda: SettingsDialog().exec())
         settings_layout.addWidget(settings_btn)
         self.stack.addWidget(settings_page)
@@ -191,13 +216,13 @@ class MainWindow(QMainWindow):
 
     def _refresh_status(self) -> None:
         self.status_label.setText(
-            f"OS: {current_os()} | Host: {host_name()} | User: {current_user()} | Admin/root: {is_admin()} | Time Range: {self.time_range.label()}"
+            f"系统: {current_os()} | 主机: {host_name()} | 用户: {current_user()} | 管理员权限: {is_admin()} | 时间范围: {self.time_range.label()}"
         )
 
     def rescan_sources(self) -> None:
         if self.scan_thread and self.scan_thread.isRunning():
             return
-        self.status_label.setText("Scanning log sources...")
+        self.status_label.setText("正在扫描日志源，请稍候...")
         self.scan_thread = QThread(self)
         self.scan_worker = SourceScanWorker(self.engine, self.user_paths)
         self.scan_worker.moveToThread(self.scan_thread)
@@ -216,19 +241,47 @@ class MainWindow(QMainWindow):
 
     def _scan_failed(self, message: str) -> None:
         self._refresh_status()
-        QMessageBox.warning(self, "Scan failed", message)
+        QMessageBox.warning(self, "扫描失败", message)
 
     def run_analysis(self) -> None:
-        self._refresh_status()
-        self.result = self.engine.run(self.time_range, add_paths=self.user_paths, sources=self.result.sources or None)
-        self.risk_label.setText(f"Risk: {self.result.risk_score}/100")
+        if self.analysis_thread and self.analysis_thread.isRunning():
+            return
+        self.analyze_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.status_label.setText("正在分析日志，请稍候...")
+        self.analysis_thread = QThread(self)
+        self.analysis_worker = AnalysisWorker(self.engine, self.time_range, self.user_paths, self.result.sources or None)
+        self.analysis_worker.moveToThread(self.analysis_thread)
+        self.analysis_thread.started.connect(self.analysis_worker.run)
+        self.analysis_worker.finished.connect(self._analysis_finished)
+        self.analysis_worker.failed.connect(self._analysis_failed)
+        self.analysis_worker.finished.connect(self.analysis_thread.quit)
+        self.analysis_worker.failed.connect(self.analysis_thread.quit)
+        self.analysis_thread.finished.connect(self.analysis_worker.deleteLater)
+        self.analysis_thread.start()
+
+    def _analysis_finished(self, result: AnalysisResult) -> None:
+        self.result = result
+        self.risk_label.setText(f"风险: {self.result.risk_score}/100")
         self.source_panel.set_sources(self.result.sources)
         self.overview.set_findings(self.result.findings)
         self.apply_finding_filters()
         self.timeline_view.set_timeline(self.result.timeline)
         self._populate_category_pages()
+        self.analyze_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self._refresh_status()
         if self.result.errors:
-            QMessageBox.warning(self, "Analysis warnings", "\n".join(self.result.errors[:10]))
+            QMessageBox.warning(self, "分析警告", "\n".join(self.result.errors[:10]))
+
+    def _analysis_failed(self, message: str) -> None:
+        self.analyze_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self._refresh_status()
+        QMessageBox.critical(self, "分析失败", message)
+
+    def stop_analysis(self) -> None:
+        QMessageBox.information(self, "停止分析", "当前版本暂不支持强制停止正在运行的分析，请等待本次分析完成。")
 
     def _populate_category_pages(self) -> None:
         category_map = {
@@ -256,17 +309,17 @@ class MainWindow(QMainWindow):
                 table.set_findings([f for f in self.result.findings if category.lower() in f.category.lower() or category.lower() in f.title.lower()])
 
     def add_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Add Log File")
+        path, _ = QFileDialog.getOpenFileName(self, "添加日志文件")
         if path:
             self._add_user_path(path)
 
     def add_directory(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Add Log Directory")
+        path = QFileDialog.getExistingDirectory(self, "添加日志目录")
         if path:
             self._add_user_path(path)
 
     def add_glob(self) -> None:
-        path, ok = QInputDialog.getText(self, "Add Glob Path", "Glob path:")
+        path, ok = QInputDialog.getText(self, "添加通配路径", "通配路径:")
         if ok and path:
             self._add_user_path(path)
 
@@ -290,8 +343,8 @@ class MainWindow(QMainWindow):
                 break
 
     def apply_finding_filters(self) -> None:
-        severity = self.severity_filter.currentText()
-        category = self.category_filter.currentText()
+        severity = self.severity_filter.currentData() or self.severity_filter.currentText()
+        category = self.category_filter.currentData() or self.category_filter.currentText()
         keyword = self.keyword_filter.text().strip()
         visible = filter_findings(
             self.result.findings,
@@ -305,16 +358,16 @@ class MainWindow(QMainWindow):
         self.result.findings.clear()
         self.result.timeline.clear()
         self.result.risk_score = 0
-        self.risk_label.setText("Risk: 0/100")
+        self.risk_label.setText("风险: 0/100")
         self.overview.set_findings([])
         self.timeline_view.set_timeline([])
         self.detail.set_finding(None)
 
     def save_session(self) -> None:
         session_id = SQLiteStorage().save_session(self.result)
-        QMessageBox.information(self, "Session saved", f"Saved session {session_id}.")
+        QMessageBox.information(self, "会话已保存", f"已保存会话 {session_id}。")
 
     def open_history(self) -> None:
         sessions = SQLiteStorage().list_sessions()
-        text = "\n".join(f"#{s['id']} {s['created_at']} risk={s['risk_score']}" for s in sessions) or "No sessions saved."
-        QMessageBox.information(self, "History", text)
+        text = "\n".join(f"#{s['id']} {s['created_at']} 风险={s['risk_score']}" for s in sessions) or "暂无已保存会话。"
+        QMessageBox.information(self, "历史会话", text)

@@ -7,6 +7,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import locale
 
 
 def current_os() -> str:
@@ -43,10 +44,26 @@ def command_exists(name: str) -> bool:
 
 def run_command(args: list[str], timeout: int = 60) -> tuple[int, str, str]:
     try:
-        proc = subprocess.run(args, text=True, encoding="utf-8", errors="replace", capture_output=True, timeout=timeout)
-        return proc.returncode, proc.stdout, proc.stderr
+        proc = subprocess.run(args, capture_output=True, timeout=timeout)
+        encodings = ["utf-8-sig"]
+        if current_os() == "windows":
+            encodings.extend(["gbk", locale.getpreferredencoding(False)])
+        else:
+            encodings.append(locale.getpreferredencoding(False))
+        return proc.returncode, decode_output(proc.stdout, encodings), decode_output(proc.stderr, encodings)
     except Exception as exc:
         return 1, "", str(exc)
+
+
+def decode_output(data: bytes, encodings: list[str]) -> str:
+    for encoding in encodings:
+        if not encoding:
+            continue
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace")
 
 
 def app_runtime() -> str:

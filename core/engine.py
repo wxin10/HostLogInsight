@@ -95,6 +95,7 @@ class AnalysisEngine:
             result.sources = [source for source in result.sources if self._source_matches(source, source_filter)]
         for collector in self.collectors:
             try:
+                collector.errors.clear()
                 result.events.extend(collector.collect(result.sources, time_range))
                 result.errors.extend(collector.errors)
             except Exception as exc:

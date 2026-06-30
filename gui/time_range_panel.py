@@ -24,7 +24,7 @@ class TimeRangePanel(QWidget):
         self.end_edit = QDateTimeEdit(self.current.end_time)
         self.start_edit.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
         self.end_edit.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
-        apply_btn = QPushButton("Apply")
+        apply_btn = QPushButton("应用")
         apply_btn.clicked.connect(self.apply_custom)
         custom.addWidget(self.start_edit)
         custom.addWidget(self.end_edit)
