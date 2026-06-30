@@ -1,0 +1,21 @@
+rules:
+  - id: db_xp_cmdshell
+    title: Database command shell usage
+    description: Database log contains xp_cmdshell indicator.
+    severity: critical
+    category: Database
+    tags: [database_attack, command_execution]
+    match:
+      message_contains: [xp_cmdshell]
+  - id: db_auth_failures
+    title: Database authentication failure burst
+    description: Repeated database authentication failures.
+    severity: high
+    category: Database
+    tags: [database_attack, bruteforce]
+    group_by: source_ip
+    time_window: 10
+    threshold: 10
+    match:
+      source_type: database
+      message_contains: [login failed, access denied, password authentication failed]

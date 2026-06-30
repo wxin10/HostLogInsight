@@ -1,0 +1,20 @@
+rules:
+  - id: ssh_failed_burst
+    title: SSH failed authentication burst
+    description: Multiple SSH failures from one source.
+    severity: high
+    category: Linux SSH
+    tags: [ssh_bruteforce, bruteforce]
+    group_by: source_ip
+    time_window: 10
+    threshold: 10
+    match:
+      message_contains: [Failed password, Invalid user, authentication failure]
+  - id: linux_log_tamper_command
+    title: Linux log tampering command
+    description: Command indicates history or log destruction.
+    severity: critical
+    category: Log Tamper
+    tags: [log_tamper]
+    match:
+      message_contains: [history -c, truncate -s 0, journalctl --vacuum-time]

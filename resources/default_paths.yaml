@@ -1,0 +1,84 @@
+windows:
+  event_channels:
+    - Security
+    - System
+    - Application
+    - Setup
+    - Windows PowerShell
+    - Microsoft-Windows-PowerShell/Operational
+    - Microsoft-Windows-TaskScheduler/Operational
+    - Microsoft-Windows-TerminalServices-LocalSessionManager/Operational
+    - Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational
+    - Microsoft-Windows-WinRM/Operational
+    - Microsoft-Windows-WMI-Activity/Operational
+    - Microsoft-Windows-Sysmon/Operational
+    - Microsoft-Windows-Windows Defender/Operational
+    - Microsoft-Windows-DNS-Client/Operational
+    - Microsoft-Windows-Bits-Client/Operational
+    - Microsoft-Windows-Windows Firewall With Advanced Security/Firewall
+  file_paths:
+    - C:\inetpub\logs\LogFiles
+    - C:\Windows\System32\LogFiles\HTTPERR
+    - C:\Program Files\Microsoft SQL Server
+    - C:\Program Files (x86)\Microsoft SQL Server
+    - C:\ProgramData\MySQL
+    - C:\Program Files\MySQL
+    - C:\nginx\logs
+    - C:\Apache24\logs
+    - C:\xampp\apache\logs
+    - C:\tomcat\logs
+    - C:\Program Files\Apache Software Foundation
+    - C:\Program Files\Apache Tomcat
+    - C:\ProgramData
+    - C:\Windows\Temp
+    - C:\Temp
+linux:
+  journal:
+    - systemd-journal
+  system_logs:
+    - /var/log/auth.log
+    - /var/log/secure
+    - /var/log/syslog
+    - /var/log/messages
+    - /var/log/kern.log
+    - /var/log/audit/audit.log
+    - /var/log/cron
+    - /var/log/faillog
+    - /var/log/lastlog
+    - /var/log/btmp
+    - /var/log/wtmp
+  package_logs:
+    - /var/log/yum.log
+    - /var/log/dnf.log
+    - /var/log/dpkg.log
+    - /var/log/apt/history.log
+  web_logs:
+    - /var/log/nginx/access.log
+    - /var/log/nginx/error.log
+    - /var/log/apache2/access.log
+    - /var/log/apache2/error.log
+    - /var/log/httpd/access_log
+    - /var/log/httpd/error_log
+    - /usr/local/nginx/logs
+    - /usr/local/apache/logs
+  database_logs:
+    - /var/log/mysql/error.log
+    - /var/log/mysqld.log
+    - /var/log/mariadb/mariadb.log
+    - /var/log/postgresql
+    - /var/lib/pgsql/data/log
+    - /var/log/mongodb
+    - /var/log/redis
+  application_logs:
+    - /opt/tomcat/logs
+    - /usr/local/tomcat/logs
+    - /var/log/tomcat
+    - /opt
+    - /data
+    - /srv
+    - /www
+    - /var/www
+  container_logs:
+    - /var/log/containers
+    - /var/log/pods
+    - /var/lib/docker/containers

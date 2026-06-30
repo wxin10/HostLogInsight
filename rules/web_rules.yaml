@@ -1,0 +1,21 @@
+rules:
+  - id: web_jndi_probe
+    title: Log4Shell/JNDI probe
+    description: Web request contains JNDI lookup payload.
+    severity: high
+    category: Web Attack
+    tags: [web_attack]
+    match:
+      url_contains: [jndi, "${jndi"]
+  - id: web_404_scan
+    title: Web directory scan
+    description: Large number of 404 responses from one IP.
+    severity: medium
+    category: Web Attack
+    tags: [scanner]
+    group_by: source_ip
+    time_window: 10
+    threshold: 30
+    match:
+      source_type: web
+      status_code: 404

@@ -1,0 +1,28 @@
+rules:
+  - id: win_failed_logon_burst
+    title: Windows failed logon burst
+    description: Multiple failed Windows logons from the same IP.
+    severity: high
+    category: Windows Bruteforce
+    tags: [bruteforce]
+    group_by: source_ip
+    time_window: 10
+    threshold: 20
+    match:
+      event_id: 4625
+  - id: powershell_encoded
+    title: Encoded PowerShell command
+    description: PowerShell command contains encoded command indicators.
+    severity: high
+    category: PowerShell
+    tags: [powershell, suspicious_process]
+    match:
+      command_contains: [-EncodedCommand, FromBase64String]
+  - id: windows_log_cleared
+    title: Windows event log cleared
+    description: Windows audit log clear event observed.
+    severity: critical
+    category: Log Tamper
+    tags: [log_tamper]
+    match:
+      event_id: 1102
