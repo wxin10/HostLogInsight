@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime
 
 from core.collector_base import Collector
 from core.models import LogEvent, LogSource
@@ -34,8 +35,18 @@ class FileCollector(Collector):
             self.mark_error(source, "unavailable", "Source is not a file.")
             return []
         try:
-            if path.stat().st_size > self.max_file_mb * 1024 * 1024:
-                self.mark_error(source, "unavailable", f"File exceeds size limit {self.max_file_mb}MB.")
+            stat = path.stat()
+            if datetime.fromtimestamp(stat.st_mtime) < time_range.start_time:
+                source.status = "available"
+                source.error_message = ""
+                source.attributes.update({"total_lines_read": 0, "parsed_events": 0, "parse_errors": 0, "skipped_reason": "mtime_before_time_range"})
+                return []
+            if stat.st_size > self.max_file_mb * 1024 * 1024:
+                message = f"File exceeds size limit {self.max_file_mb}MB."
+                if source.discovered_by == "user_added":
+                    message += " Increase --max-file-mb to analyze this user-added file."
+                self.mark_error(source, "unavailable", message)
+                source.attributes.update({"skipped_reason": "file_size_limit", "max_file_mb": self.max_file_mb, "file_size": stat.st_size})
                 return []
         except PermissionError:
             self.mark_error(source, "permission_denied", "Permission denied.")
@@ -47,6 +58,7 @@ class FileCollector(Collector):
         parser = get_parser(source.parser or guess_parser_name(source.path, source.source_type))
         events: list[LogEvent] = []
         parse_errors = 0
+        total_lines = 0
         handle = None
         for encoding in ("utf-8", "gbk", "latin-1"):
             try:
@@ -66,6 +78,7 @@ class FileCollector(Collector):
 
         with handle:
             for line_no, line in enumerate(handle, start=1):
+                total_lines = line_no
                 try:
                     event = parser.parse_line(line, source, line_no)
                     if event and (event.timestamp is None or time_range.contains(event.timestamp)):
@@ -80,4 +93,5 @@ class FileCollector(Collector):
         else:
             source.status = "available"
             source.error_message = ""
+        source.attributes.update({"total_lines_read": total_lines, "parsed_events": len(events), "parse_errors": parse_errors, "skipped_reason": ""})
         return events

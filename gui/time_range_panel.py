@@ -14,7 +14,7 @@ class TimeRangePanel(QWidget):
         self.current = TimeRange.from_last("24h")
         layout = QVBoxLayout(self)
         buttons = QHBoxLayout()
-        for label, preset in [("1h", "last_1h"), ("6h", "last_6h"), ("24h", "last_24h"), ("7d", "last_7d"), ("30d", "last_30d")]:
+        for label, preset in [("30m", "last_30m"), ("1h", "last_1h"), ("6h", "last_6h"), ("24h", "last_24h"), ("7d", "last_7d"), ("30d", "last_30d")]:
             btn = QPushButton(label)
             btn.clicked.connect(lambda checked=False, p=preset: self.set_preset(p))
             buttons.addWidget(btn)

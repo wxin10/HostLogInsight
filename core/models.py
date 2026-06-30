@@ -24,6 +24,7 @@ class LogSource:
     status: str = "available"
     error_message: str = ""
     last_scan_time: datetime | None = None
+    attributes: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -75,7 +76,11 @@ class LogEvent:
                 self.process_name,
                 self.parent_process_name,
                 self.command_line,
+                self.request_method,
                 self.url,
+                self.status_code,
+                self.user_agent,
+                self.referer,
                 self.message,
                 self.raw,
             ]
@@ -123,3 +128,4 @@ class AnalysisResult:
     timeline: list[dict[str, Any]] = field(default_factory=list)
     risk_score: int = 0
     errors: list[str] = field(default_factory=list)
+    stats: dict[str, Any] = field(default_factory=dict)

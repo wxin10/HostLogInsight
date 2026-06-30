@@ -27,15 +27,19 @@ class SQLiteStorage:
                     sources TEXT NOT NULL,
                     events TEXT NOT NULL,
                     findings TEXT NOT NULL,
-                    timeline TEXT NOT NULL
+                    timeline TEXT NOT NULL,
+                    stats TEXT NOT NULL DEFAULT '{}'
                 )
                 """
             )
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()}
+            if "stats" not in columns:
+                conn.execute("ALTER TABLE sessions ADD COLUMN stats TEXT NOT NULL DEFAULT '{}'")
 
     def save_session(self, result: AnalysisResult) -> int:
         with self._connect() as conn:
             cur = conn.execute(
-                "INSERT INTO sessions(created_at, risk_score, sources, events, findings, timeline) VALUES(?,?,?,?,?,?)",
+                "INSERT INTO sessions(created_at, risk_score, sources, events, findings, timeline, stats) VALUES(?,?,?,?,?,?,?)",
                 (
                     datetime.now().isoformat(),
                     result.risk_score,
@@ -43,6 +47,7 @@ class SQLiteStorage:
                     json_dumps([e.to_dict() for e in result.events]),
                     json_dumps([f.to_dict() for f in result.findings]),
                     json_dumps(result.timeline),
+                    json_dumps(result.stats),
                 ),
             )
             return int(cur.lastrowid)

@@ -9,7 +9,7 @@ from parsers.generic_text_parser import GenericTextParser
 
 
 COMMON_RE = re.compile(
-    r'(?P<ip>\S+) \S+ (?P<user>\S+) \[(?P<ts>[^\]]+)\] "(?P<method>[A-Z]+) (?P<url>[^" ]+)[^"]*" (?P<status>\d{3}) (?P<size>\S+)(?: "(?P<referer>[^"]*)" "(?P<ua>[^"]*)")?'
+    r'(?P<ip>\S+) \S+ (?P<user>\S+) \[(?P<ts>[^\]]+)\] "(?P<method>[A-Z]+) (?P<url>[^" ]+)(?: HTTP/(?P<http_version>[^"]+))?" (?P<status>\d{3}) (?P<size>\S+)(?: "(?P<referer>[^"]*)" "(?P<ua>[^"]*)")?(?: (?P<request_time>\d+(?:\.\d+)?))?'
 )
 
 
@@ -44,5 +44,22 @@ class NginxParser(GenericTextParser):
             source_ip=match.group("ip"),
             message=raw,
             raw=raw,
-            attributes={"line_no": line_no, "bytes": match.group("size")},
+            attributes={
+                "line_no": line_no,
+                "response_size": parse_number(match.group("size")),
+                "http_version": match.group("http_version") or "",
+                "request_time": parse_number(match.group("request_time")),
+            },
         )
+
+
+def parse_number(value: str | None):
+    if not value or value == "-":
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        try:
+            return float(value)
+        except ValueError:
+            return value

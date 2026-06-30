@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from collections import Counter
+from datetime import datetime
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, QThread, Qt, Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
+    QLineEdit,
     QListWidget,
     QMainWindow,
     QMessageBox,
@@ -18,8 +21,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.config import load_user_paths, save_user_paths
+from core.config import load_user_path_entries, load_user_paths, save_user_path_entries, save_user_paths
 from core.engine import AnalysisEngine
+from core.filters import filter_findings
 from core.models import AnalysisResult
 from core.platform_utils import current_os, current_user, host_name, is_admin
 from core.storage import SQLiteStorage
@@ -32,6 +36,22 @@ from gui.time_range_panel import TimeRangePanel
 from gui.timeline_view import TimelineView
 
 
+class SourceScanWorker(QObject):
+    finished = Signal(list)
+    failed = Signal(str)
+
+    def __init__(self, engine: AnalysisEngine, user_paths: list[str]) -> None:
+        super().__init__()
+        self.engine = engine
+        self.user_paths = user_paths
+
+    def run(self) -> None:
+        try:
+            self.finished.emit(self.engine.path_discovery.discover(user_paths=self.user_paths))
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -39,7 +59,9 @@ class MainWindow(QMainWindow):
         self.engine = AnalysisEngine()
         self.time_range = TimeRange.from_last("24h")
         self.result = AnalysisResult()
-        self.user_paths = load_user_paths()
+        self.user_path_entries = load_user_path_entries()
+        self.user_paths = [entry["path"] for entry in self.user_path_entries if entry.get("enabled", True)]
+        self.scan_thread: QThread | None = None
 
         self.status_label = QLabel()
         self.risk_label = QLabel("Risk: 0/100")
@@ -61,13 +83,15 @@ class MainWindow(QMainWindow):
         add_file_btn.clicked.connect(self.add_file)
         add_dir_btn = QPushButton("Add Log Directory")
         add_dir_btn.clicked.connect(self.add_directory)
+        add_glob_btn = QPushButton("Add Glob")
+        add_glob_btn.clicked.connect(self.add_glob)
         clear_btn = QPushButton("Clear Results")
         clear_btn.clicked.connect(self.clear_results)
         save_btn = QPushButton("Save Session")
         save_btn.clicked.connect(self.save_session)
         history_btn = QPushButton("Open History")
         history_btn.clicked.connect(self.open_history)
-        for widget in [analyze_btn, stop_btn, rescan_btn, add_file_btn, add_dir_btn, clear_btn, save_btn, history_btn, self.risk_label]:
+        for widget in [analyze_btn, stop_btn, rescan_btn, add_file_btn, add_dir_btn, add_glob_btn, clear_btn, save_btn, history_btn, self.risk_label]:
             toolbar.addWidget(widget)
 
     def _build_layout(self) -> None:
@@ -112,6 +136,20 @@ class MainWindow(QMainWindow):
 
         overview_page = QWidget()
         overview_layout = QVBoxLayout(overview_page)
+        filter_layout = QHBoxLayout()
+        self.severity_filter = QComboBox()
+        self.severity_filter.addItems(["all", "critical", "high", "medium", "low", "info"])
+        self.category_filter = QComboBox()
+        self.category_filter.addItems(["all", "authentication", "bruteforce", "rdp", "ssh", "privilege", "service", "task", "powershell", "process", "defender", "log_tamper", "web_attack", "database_attack", "persistence"])
+        self.keyword_filter = QLineEdit()
+        self.keyword_filter.setPlaceholderText("Search findings")
+        self.severity_filter.currentTextChanged.connect(self.apply_finding_filters)
+        self.category_filter.currentTextChanged.connect(self.apply_finding_filters)
+        self.keyword_filter.textChanged.connect(self.apply_finding_filters)
+        filter_layout.addWidget(self.severity_filter)
+        filter_layout.addWidget(self.category_filter)
+        filter_layout.addWidget(self.keyword_filter)
+        overview_layout.addLayout(filter_layout)
         splitter = QSplitter(Qt.Vertical)
         splitter.addWidget(self.overview)
         splitter.addWidget(self.detail)
@@ -120,6 +158,7 @@ class MainWindow(QMainWindow):
 
         self.stack.addWidget(overview_page)
         self.stack.addWidget(self.source_panel)
+        self.source_panel.source_toggled.connect(self._source_toggled)
         self.stack.addWidget(self.time_panel)
         for _ in range(16):
             page = QWidget()
@@ -156,8 +195,28 @@ class MainWindow(QMainWindow):
         )
 
     def rescan_sources(self) -> None:
-        self.result.sources = self.engine.path_discovery.discover(user_paths=self.user_paths)
+        if self.scan_thread and self.scan_thread.isRunning():
+            return
+        self.status_label.setText("Scanning log sources...")
+        self.scan_thread = QThread(self)
+        self.scan_worker = SourceScanWorker(self.engine, self.user_paths)
+        self.scan_worker.moveToThread(self.scan_thread)
+        self.scan_thread.started.connect(self.scan_worker.run)
+        self.scan_worker.finished.connect(self._scan_finished)
+        self.scan_worker.failed.connect(self._scan_failed)
+        self.scan_worker.finished.connect(self.scan_thread.quit)
+        self.scan_worker.failed.connect(self.scan_thread.quit)
+        self.scan_thread.finished.connect(self.scan_worker.deleteLater)
+        self.scan_thread.start()
+
+    def _scan_finished(self, sources: list) -> None:
+        self.result.sources = sources
         self.source_panel.set_sources(self.result.sources)
+        self._refresh_status()
+
+    def _scan_failed(self, message: str) -> None:
+        self._refresh_status()
+        QMessageBox.warning(self, "Scan failed", message)
 
     def run_analysis(self) -> None:
         self._refresh_status()
@@ -165,6 +224,7 @@ class MainWindow(QMainWindow):
         self.risk_label.setText(f"Risk: {self.result.risk_score}/100")
         self.source_panel.set_sources(self.result.sources)
         self.overview.set_findings(self.result.findings)
+        self.apply_finding_filters()
         self.timeline_view.set_timeline(self.result.timeline)
         self._populate_category_pages()
         if self.result.errors:
@@ -205,11 +265,41 @@ class MainWindow(QMainWindow):
         if path:
             self._add_user_path(path)
 
+    def add_glob(self) -> None:
+        path, ok = QInputDialog.getText(self, "Add Glob Path", "Glob path:")
+        if ok and path:
+            self._add_user_path(path)
+
     def _add_user_path(self, path: str) -> None:
-        if path not in self.user_paths:
-            self.user_paths.append(path)
-            save_user_paths(self.user_paths)
+        if path not in [entry["path"] for entry in self.user_path_entries]:
+            self.user_path_entries.append({"path": path, "enabled": True, "added_time": datetime.now().isoformat(timespec="seconds")})
+            save_user_path_entries(self.user_path_entries)
+        self.user_paths = [entry["path"] for entry in self.user_path_entries if entry.get("enabled", True)]
         self.rescan_sources()
+
+    def _source_toggled(self, source_id: str, enabled: bool) -> None:
+        for source in self.result.sources:
+            if source.source_id == source_id:
+                source.enabled = enabled
+                if source.discovered_by == "user_added" and source.path:
+                    for entry in self.user_path_entries:
+                        if entry["path"] == source.path:
+                            entry["enabled"] = enabled
+                    save_user_path_entries(self.user_path_entries)
+                    self.user_paths = [entry["path"] for entry in self.user_path_entries if entry.get("enabled", True)]
+                break
+
+    def apply_finding_filters(self) -> None:
+        severity = self.severity_filter.currentText()
+        category = self.category_filter.currentText()
+        keyword = self.keyword_filter.text().strip()
+        visible = filter_findings(
+            self.result.findings,
+            None if severity == "all" else severity,
+            None if category == "all" else category,
+            keyword or None,
+        )
+        self.overview.set_visible_findings(visible)
 
     def clear_results(self) -> None:
         self.result.findings.clear()

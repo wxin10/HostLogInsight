@@ -15,6 +15,9 @@ HostLogInsight is a local Windows/Linux host log analysis tool for incident resp
 - Security analyzers for Windows login/bruteforce/RDP/users/services/tasks/PowerShell/process/Defender/log tamper, Linux SSH/sudo/users/persistence/log tamper, web attacks, and database attacks.
 - YAML rule engine with threshold support.
 - Risk score, timeline, evidence, and SQLite session saving.
+- GUI source grouping, source status filters, and finding filters.
+- Offline `.evtx` import on Windows through `Get-WinEvent -Path`; other platforms mark EVTX sources as unsupported.
+- Web summary statistics for top IPs, URLs, status codes, user agents, 404/5xx/POST counts, and suspicious request count.
 
 HTML, PDF, and CSV report export are intentionally not implemented in this first phase.
 
@@ -52,9 +55,64 @@ python main.py --cli --add-path /var/log/nginx
 python main.py --cli --add-path C:\inetpub\logs\LogFiles
 python main.py --cli --os windows --source system
 python main.py --cli --os linux --source web --save
+python main.py --cli --list-sources
+python main.py --cli --last 7d --severity high --category web_attack
+python main.py --cli --add-path /var/log/nginx --keyword sqlmap
+python main.py --cli --add-path "./Security.evtx" --last 30d
+python main.py --cli --add-path "/var/log/nginx/*.log" --source web
 ```
 
 Linux GUI mode requires a desktop environment and Qt-compatible display session. On headless servers, use CLI mode.
+
+## CLI Options
+
+- `--list-sources`: discover and print sources without running analysis.
+- `--severity critical|high|medium|low|info`: display only matching findings.
+- `--category web_attack|database_attack|authentication|bruteforce|rdp|ssh|privilege|service|task|powershell|process|defender|log_tamper|persistence`: display matching finding categories.
+- `--keyword TEXT`: search finding title, description, user, source IP, and raw evidence.
+- `--max-findings N`: limit finding output.
+- `--max-file-mb N`: set text log file size limit.
+- `--debug`: print source attributes and more warnings.
+
+## Adding Paths
+
+Add a file:
+
+```bash
+python main.py --cli --add-path /var/log/auth.log --last 24h
+```
+
+Add a directory:
+
+```bash
+python main.py --cli --add-path /var/log/nginx --source web --last 7d
+```
+
+Add a glob:
+
+```bash
+python main.py --cli --add-path "/var/log/nginx/*.log" --source web
+python main.py --cli --add-path "C:\inetpub\logs\LogFiles\*\*.log" --source web
+```
+
+User-added GUI paths are stored locally:
+
+- Windows: `%APPDATA%\HostLogInsight\user_paths.json`
+- Linux: `~/.config/HostLogInsight/user_paths.json`
+
+## EVTX Offline Import
+
+`.evtx` files are discovered as Windows event sources. On Windows, HostLogInsight calls PowerShell `Get-WinEvent -Path <file.evtx>` and applies the selected time range. On Linux or other platforms, EVTX sources are marked `unsupported` with a clear status message; analysis does not crash.
+
+## Web Log Analysis
+
+Supported web formats include IIS W3C, Nginx/Apache combined access logs, and Tomcat access logs. Parsed fields include timestamp, source IP, method, URL, status code, User-Agent, Referer, response size, HTTP version, request time when present, source path, and raw evidence.
+
+Web analyzers detect suspicious POSTs, administrative/sensitive paths, high-risk extensions, SQL injection, command injection, path traversal, WebShell indicators, scanner User-Agents, high URL fan-out, large 404 bursts, and 5xx spikes.
+
+## Database Log Analysis
+
+MSSQL, MySQL/MariaDB, and PostgreSQL analyzers detect authentication failure bursts, privileged account brute force (`sa`, `root`, `postgres`), high-risk command execution features, privilege changes, export/read primitives, backup/restore operations, and suspicious administrative activity.
 
 ## Packaging Notes
 

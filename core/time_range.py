@@ -24,7 +24,9 @@ class TimeRange:
     def from_last(cls, value: str, now: datetime | None = None) -> "TimeRange":
         now = now or datetime.now()
         raw = value.strip().lower()
-        if raw.endswith("h"):
+        if raw.endswith("m"):
+            delta = timedelta(minutes=int(raw[:-1]))
+        elif raw.endswith("h"):
             delta = timedelta(hours=int(raw[:-1]))
         elif raw.endswith("d"):
             delta = timedelta(days=int(raw[:-1]))
@@ -37,6 +39,7 @@ class TimeRange:
     def preset_range(cls, preset: str, now: datetime | None = None) -> "TimeRange":
         mapping = {
             "last_1h": "1h",
+            "last_30m": "30m",
             "last_6h": "6h",
             "last_24h": "24h",
             "last_7d": "7d",

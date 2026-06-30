@@ -12,12 +12,21 @@ class FindingTable(QTableWidget):
     def __init__(self) -> None:
         super().__init__(0, 8)
         self.findings: list[Finding] = []
+        self.visible_findings: list[Finding] = []
         self.setHorizontalHeaderLabels(["Time", "Severity", "Type", "User", "Source IP", "Source", "Description", "Confidence"])
         self.horizontalHeader().setStretchLastSection(True)
         self.itemSelectionChanged.connect(self._emit_selected)
 
     def set_findings(self, findings: list[Finding]) -> None:
         self.findings = findings
+        self.visible_findings = findings
+        self._render(findings)
+
+    def set_visible_findings(self, findings: list[Finding]) -> None:
+        self.visible_findings = findings
+        self._render(findings)
+
+    def _render(self, findings: list[Finding]) -> None:
         self.setRowCount(len(findings))
         for row, finding in enumerate(findings):
             source = finding.evidence[0].get("source", "") if finding.evidence else ""
@@ -36,5 +45,5 @@ class FindingTable(QTableWidget):
 
     def _emit_selected(self) -> None:
         row = self.currentRow()
-        if 0 <= row < len(self.findings):
-            self.finding_selected.emit(self.findings[row])
+        if 0 <= row < len(self.visible_findings):
+            self.finding_selected.emit(self.visible_findings[row])

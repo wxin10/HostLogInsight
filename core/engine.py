@@ -41,14 +41,16 @@ from core.path_discovery import PathDiscovery
 from core.platform_utils import current_os
 from core.risk_score import RiskScorer
 from core.rule_engine import RuleEngine
+from core.stats import build_stats
 from core.time_range import TimeRange
 from core.timeline import build_timeline
 
 
 class AnalysisEngine:
-    def __init__(self, path_discovery: PathDiscovery | None = None) -> None:
-        self.path_discovery = path_discovery or PathDiscovery()
-        self.collectors = [WindowsEventCollector(), LinuxJournalCollector(), FileCollector()]
+    def __init__(self, path_discovery: PathDiscovery | None = None, max_file_mb: int = 512) -> None:
+        self.path_discovery = path_discovery or PathDiscovery(max_file_mb=max_file_mb)
+        self.max_file_mb = max_file_mb
+        self.collectors = [WindowsEventCollector(), LinuxJournalCollector(), FileCollector(max_file_mb=max_file_mb)]
         self.analyzers = [
             WindowsLoginAnalyzer(),
             WindowsBruteforceAnalyzer(),
@@ -108,6 +110,7 @@ class AnalysisEngine:
             result.errors.append(f"RuleEngine: {exc}")
         result.timeline = build_timeline(result.events, result.findings)
         result.risk_score = self.risk_scorer.score(result.findings)
+        result.stats = build_stats(result.events, result.findings)
         return result
 
     def _source_matches(self, source: LogSource, source_filter: str) -> bool:

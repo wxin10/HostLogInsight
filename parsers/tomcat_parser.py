@@ -1,5 +1,5 @@
-from parsers.generic_text_parser import GenericTextParser
+from parsers.nginx_parser import NginxParser
 
 
-class TomcatParser(GenericTextParser):
+class TomcatParser(NginxParser):
     name = "tomcat"

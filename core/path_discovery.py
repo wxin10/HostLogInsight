@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import glob
 from datetime import datetime
 from pathlib import Path
 
@@ -15,9 +16,10 @@ LOG_NAMES = {"access_log", "error_log", "errorlog", "catalina.out"}
 
 
 class PathDiscovery:
-    def __init__(self, max_depth: int = 4, max_file_mb: int = 512) -> None:
+    def __init__(self, max_depth: int = 4, max_file_mb: int = 512, max_files_per_root: int = 5000) -> None:
         self.max_depth = max_depth
         self.max_file_mb = max_file_mb
+        self.max_files_per_root = max_files_per_root
         self.config = load_default_paths()
 
     def discover(self, os_type: str | None = None, user_paths: list[str] | None = None) -> list[LogSource]:
@@ -47,7 +49,18 @@ class PathDiscovery:
 
     def sources_from_path(self, raw_path: str, os_type: str | None = None, discovered_by: str = "user_added") -> list[LogSource]:
         os_type = os_type or current_os()
-        path = Path(os.path.expandvars(os.path.expanduser(raw_path)))
+        expanded = os.path.expandvars(os.path.expanduser(raw_path))
+        if glob.has_magic(expanded):
+            matches = glob.glob(expanded, recursive=True)
+            if not matches:
+                return [LogSource(os_type=os_type, source_type=self._source_type_for_path(expanded), name=Path(expanded).name or expanded, path=expanded, parser=guess_parser_name(expanded), discovered_by=discovered_by, status="unavailable", error_message="Glob matched no files.", attributes={"source_group": "User Added", "glob": raw_path})]
+            sources: list[LogSource] = []
+            for match in matches[: self.max_files_per_root]:
+                sources.extend(self.sources_from_path(match, os_type, discovered_by))
+            if len(matches) > self.max_files_per_root:
+                sources.append(LogSource(os_type=os_type, source_type="file", name=expanded, path=expanded, discovered_by=discovered_by, status="unavailable", error_message=f"Glob exceeded max_files_per_root={self.max_files_per_root}.", attributes={"skipped_reason": "max_files_per_root"}))
+            return sources
+        path = Path(expanded)
         if not path.exists():
             return [
                 LogSource(
@@ -59,6 +72,7 @@ class PathDiscovery:
                     discovered_by=discovered_by,
                     status="unavailable",
                     error_message="Path does not exist.",
+                    attributes={"source_group": self._source_group("", str(path), discovered_by)},
                 )
             ]
         if path.is_file():
@@ -76,6 +90,7 @@ class PathDiscovery:
                 parser="windows_event",
                 discovered_by="default",
                 status="available",
+                attributes={"source_group": "Windows Event Log"},
             )
             for channel in channels
         ]
@@ -87,7 +102,7 @@ class PathDiscovery:
         if code != 0:
             return []
         return [
-            LogSource(os_type="windows", source_type="windows_event", name=line.strip(), channel=line.strip(), parser="windows_event", discovered_by="auto_discovery")
+            LogSource(os_type="windows", source_type="windows_event", name=line.strip(), channel=line.strip(), parser="windows_event", enabled=False, discovered_by="auto_discovery", attributes={"source_group": "Windows Event Log"})
             for line in out.splitlines()
             if line.strip()
         ]
@@ -104,6 +119,7 @@ class PathDiscovery:
                 discovered_by="auto_discovery",
                 status=status,
                 error_message="" if status == "available" else "journalctl not found.",
+                attributes={"source_group": "Linux Journal"},
             )
         ]
 
@@ -111,15 +127,16 @@ class PathDiscovery:
         try:
             root_stat = root.stat()
         except PermissionError:
-            yield LogSource(os_type=os_type, source_type="file", name=root.name, path=str(root), discovered_by=discovered_by, status="permission_denied", error_message="Permission denied.")
+            yield LogSource(os_type=os_type, source_type="file", name=root.name, path=str(root), discovered_by=discovered_by, status="permission_denied", error_message="Permission denied.", attributes={"source_group": self._source_group("file", str(root), discovered_by)})
             return
         except OSError as exc:
-            yield LogSource(os_type=os_type, source_type="file", name=root.name, path=str(root), discovered_by=discovered_by, status="unavailable", error_message=str(exc))
+            yield LogSource(os_type=os_type, source_type="file", name=root.name, path=str(root), discovered_by=discovered_by, status="unavailable", error_message=str(exc), attributes={"source_group": self._source_group("file", str(root), discovered_by)})
             return
 
         max_bytes = self.max_file_mb * 1024 * 1024
         root_depth = len(root.parts)
         stack = [root]
+        yielded = 0
         while stack:
             current = stack.pop()
             try:
@@ -128,17 +145,21 @@ class PathDiscovery:
                     if child.is_dir() and depth < self.max_depth:
                         stack.append(child)
                     elif child.is_file() and self._looks_like_log(child):
+                        if yielded >= self.max_files_per_root:
+                            yield LogSource(os_type=os_type, source_type="file", name=root.name, path=str(root), discovered_by=discovered_by, status="unavailable", error_message=f"Directory exceeded max_files_per_root={self.max_files_per_root}.", attributes={"skipped_reason": "max_files_per_root"})
+                            return
                         try:
                             if child.stat().st_size > max_bytes:
                                 yield self._file_source(child, os_type, discovered_by, "unavailable", f"File exceeds size limit {self.max_file_mb}MB.")
                             else:
                                 yield self._file_source(child, os_type, discovered_by)
+                            yielded += 1
                         except PermissionError:
                             yield self._file_source(child, os_type, discovered_by, "permission_denied", "Permission denied.")
                         except OSError as exc:
                             yield self._file_source(child, os_type, discovered_by, "unavailable", str(exc))
             except PermissionError:
-                yield LogSource(os_type=os_type, source_type="file", name=current.name, path=str(current), discovered_by=discovered_by, status="permission_denied", error_message="Permission denied.")
+                yield LogSource(os_type=os_type, source_type="file", name=current.name, path=str(current), discovered_by=discovered_by, status="permission_denied", error_message="Permission denied.", attributes={"source_group": self._source_group("file", str(current), discovered_by)})
             except OSError:
                 continue
         _ = root_stat
@@ -151,10 +172,12 @@ class PathDiscovery:
             name=path.name,
             path=str(path),
             parser=guess_parser_name(str(path), source_type),
+            enabled=self._default_enabled(str(path), discovered_by),
             discovered_by=discovered_by,
             status=status,
             error_message=error,
             last_scan_time=datetime.now(),
+            attributes={"source_group": self._source_group(source_type, str(path), discovered_by)},
         )
 
     def _source_type_for_path(self, path: str) -> str:
@@ -169,6 +192,41 @@ class PathDiscovery:
 
     def _looks_like_log(self, path: Path) -> bool:
         return path.suffix.lower() in LOG_SUFFIXES or path.name.lower() in LOG_NAMES
+
+    def _source_group(self, source_type: str, path: str, discovered_by: str) -> str:
+        if discovered_by == "user_added":
+            return "User Added"
+        low = path.lower()
+        if source_type == "windows_event":
+            return "Windows Event Log"
+        if source_type == "linux_journal":
+            return "Linux Journal"
+        if source_type == "web":
+            return "Web Logs"
+        if source_type == "database":
+            return "Database Logs"
+        if any(x in low for x in ["container", "pods", "docker"]):
+            return "Container Logs"
+        if any(x in low for x in ["app", "tomcat", "opt", "srv", "www"]):
+            return "Application Logs"
+        return "System File Logs"
+
+    def _default_enabled(self, path: str, discovered_by: str) -> bool:
+        if discovered_by == "user_added":
+            return True
+        low = path.lower()
+        broad_roots = [
+            "c:\\programdata",
+            "c:\\windows\\temp",
+            "c:\\temp",
+            "/opt/",
+            "/data/",
+            "/srv/",
+            "/www/",
+            "/var/www/",
+            "/var/lib/docker/containers",
+        ]
+        return not any(low.startswith(root) for root in broad_roots)
 
     def _dedupe(self, sources: list[LogSource]) -> list[LogSource]:
         seen: set[tuple[str, str, str]] = set()
