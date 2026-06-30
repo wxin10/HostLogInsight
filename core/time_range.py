@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import re
 
 
 TIME_FORMATS = (
@@ -11,6 +12,8 @@ TIME_FORMATS = (
     "%Y/%m/%d %H:%M:%S",
     "%Y/%m/%d %H:%M",
     "%Y/%m/%d",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S%z",
 )
 
 
@@ -22,20 +25,28 @@ class TimeRange:
 
     @classmethod
     def from_last(cls, value: str, now: datetime | None = None) -> "TimeRange":
-        now = now or datetime.now()
-        raw = value.strip().lower()
-        if raw.endswith("h"):
-            delta = timedelta(hours=int(raw[:-1]))
-        elif raw.endswith("d"):
-            delta = timedelta(days=int(raw[:-1]))
+        now = normalize_datetime(now or datetime.now())
+        raw = value.strip().lower().replace(" ", "")
+        match = re.fullmatch(r"(\d+)(m|h|d)", raw)
+        if not match:
+            raise ValueError("Invalid --last value. Use forms like 30m, 1h, 6h, 24h, 7d, 30d.")
+        amount = int(match.group(1))
+        unit = match.group(2)
+        if amount <= 0:
+            raise ValueError("--last value must be greater than zero.")
+        if unit == "m":
+            delta = timedelta(minutes=amount)
+        elif unit == "h":
+            delta = timedelta(hours=amount)
         else:
-            raise ValueError("Invalid --last value. Use forms like 1h, 6h, 24h, 7d, 30d.")
-        preset = f"last_{raw}"
+            delta = timedelta(days=amount)
+        preset = f"last_{amount}{unit}"
         return cls(now - delta, now, preset)
 
     @classmethod
     def preset_range(cls, preset: str, now: datetime | None = None) -> "TimeRange":
         mapping = {
+            "last_30m": "30m",
             "last_1h": "1h",
             "last_6h": "6h",
             "last_24h": "24h",
@@ -50,8 +61,8 @@ class TimeRange:
 
     @classmethod
     def custom(cls, start: str, end: str) -> "TimeRange":
-        start_dt = parse_datetime(start)
-        end_dt = parse_datetime(end)
+        start_dt = normalize_datetime(parse_datetime(start))
+        end_dt = normalize_datetime(parse_datetime(end))
         if start_dt > end_dt:
             raise ValueError("Start time must be earlier than end time.")
         return cls(start_dt, end_dt, "custom")
@@ -59,22 +70,27 @@ class TimeRange:
     def contains(self, timestamp: datetime | None) -> bool:
         if timestamp is None:
             return False
-        if timestamp.tzinfo is not None:
-            timestamp = timestamp.replace(tzinfo=None)
-        return self.start_time <= timestamp <= self.end_time
+        ts = normalize_datetime(timestamp)
+        return self.start_time <= ts <= self.end_time
 
     def label(self) -> str:
         return f"{self.preset}: {self.start_time:%Y-%m-%d %H:%M:%S} - {self.end_time:%Y-%m-%d %H:%M:%S}"
 
 
+def normalize_datetime(value: datetime) -> datetime:
+    if value.tzinfo is not None:
+        return value.astimezone().replace(tzinfo=None)
+    return value
+
+
 def parse_datetime(value: str) -> datetime:
-    text = value.strip()
+    text = value.strip().strip('"').strip("'")
     for fmt in TIME_FORMATS:
         try:
             return datetime.strptime(text, fmt)
         except ValueError:
             continue
     try:
-        return datetime.fromisoformat(text)
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise ValueError(f"Invalid time '{value}'. Expected 'YYYY-MM-DD HH:MM:SS'.") from exc
+        raise ValueError(f"Invalid time '{value}'. Expected 'YYYY-MM-DD HH:MM:SS' or ISO 8601.") from exc
