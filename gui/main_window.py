@@ -35,6 +35,7 @@ from gui.raw_log_table import RawLogTable
 from gui.settings_dialog import SettingsDialog
 from gui.time_range_panel import TimeRangePanel
 from gui.timeline_view import TimelineView
+from gui.windows_event_table import WindowsEventTable
 
 
 class SourceScanWorker(QObject):
@@ -83,10 +84,11 @@ class MainWindow(QMainWindow):
         self.user_paths = [entry["path"] for entry in self.user_path_entries if entry.get("enabled", True)]
         self.scan_thread: QThread | None = None
         self.analysis_thread: QThread | None = None
+        self.admin_warning_shown = False
 
         self.status_label = QLabel()
-        self.summary_label = QLabel("分析项: 0 | 异常项: 0")
-        self.category_pages: dict[int, tuple[str, AnalysisTable]] = {}
+        self.summary_label = QLabel("事件数: 0 | 分析项: 0 | 异常项: 0")
+        self.category_pages: dict[int, tuple[str, object]] = {}
         self._build_toolbar()
         self._build_layout()
         self._refresh_status()
@@ -176,7 +178,8 @@ class MainWindow(QMainWindow):
         self.source_panel.source_toggled.connect(self._source_toggled)
         self.stack.addWidget(self.time_panel)
         for index, category in self._category_map().items():
-            page, table = self._build_category_page()
+            mode = self._windows_mode_map().get(index)
+            page, table = self._build_windows_page(mode) if mode else self._build_category_page()
             self.category_pages[index] = (category, table)
             self.stack.addWidget(page)
         self.stack.addWidget(self.raw_log_table)
@@ -244,6 +247,24 @@ class MainWindow(QMainWindow):
         page_layout.addWidget(table)
         return page, table
 
+    def _build_windows_page(self, mode: str) -> tuple[QWidget, WindowsEventTable]:
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        if mode == "powershell":
+            raw_table = WindowsEventTable("powershell_raw")
+            suspicious_table = WindowsEventTable("powershell_suspicious")
+            raw_table.event_selected.connect(self.detail.set_item)
+            suspicious_table.event_selected.connect(self.detail.set_item)
+            page_layout.addWidget(QLabel("PowerShell 原始行为摘要"))
+            page_layout.addWidget(raw_table)
+            page_layout.addWidget(QLabel("可疑 PowerShell 行为"))
+            page_layout.addWidget(suspicious_table)
+            return page, [raw_table, suspicious_table]
+        table = WindowsEventTable(mode)
+        table.event_selected.connect(self.detail.set_item)
+        page_layout.addWidget(table)
+        return page, table
+
     def _build_settings_page(self) -> QWidget:
         settings_page = QWidget()
         settings_layout = QVBoxLayout(settings_page)
@@ -272,14 +293,27 @@ class MainWindow(QMainWindow):
             18: "database",
         }
 
+    def _windows_mode_map(self) -> dict[int, str]:
+        return {
+            3: "login",
+            4: "login_failure",
+            5: "rdp",
+            7: "service",
+            8: "task",
+            9: "powershell",
+            10: "process",
+            12: "log_clear",
+        }
+
     def _set_time_range(self, time_range: TimeRange) -> None:
         self.time_range = time_range
         self._refresh_status()
 
     def _refresh_status(self) -> None:
-        self.status_label.setText(
-            f"系统: {current_os()} | 主机: {host_name()} | 用户: {current_user()} | 管理员权限: {is_admin()} | 时间范围: {self.time_range.label()}"
-        )
+        warning = ""
+        if current_os() == "windows" and not is_admin():
+            warning = " | 当前未以管理员身份运行，Security 登录日志可能读取不完整"
+        self.status_label.setText(f"系统: {current_os()} | 主机: {host_name()} | 用户: {current_user()} | 管理员权限: {is_admin()} | 时间范围: {self.time_range.label()}{warning}")
 
     def rescan_sources(self) -> None:
         if self.scan_thread and self.scan_thread.isRunning():
@@ -308,6 +342,9 @@ class MainWindow(QMainWindow):
     def run_analysis(self) -> None:
         if self.analysis_thread and self.analysis_thread.isRunning():
             return
+        if current_os() == "windows" and not is_admin() and not self.admin_warning_shown:
+            self.admin_warning_shown = True
+            QMessageBox.information(self, "管理员权限提示", "建议以管理员身份运行，否则登录成功/失败、特权登录等 Security 日志可能为空。")
         self.analyze_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.status_label.setText("正在分析日志，请稍候...")
@@ -324,7 +361,7 @@ class MainWindow(QMainWindow):
 
     def _analysis_finished(self, result: AnalysisResult) -> None:
         self.result = result
-        self.summary_label.setText(f"分析项: {len(self.result.summaries)} | 异常项: {len(self.result.alerts)}")
+        self.summary_label.setText(f"事件数: {len(self.result.events)} | 分析项: {len(self.result.summaries)} | 异常项: {len(self.result.alerts)}")
         self.source_panel.set_sources(self.result.sources)
         self.overview.set_items(self._analysis_items())
         self.apply_analysis_filters()
@@ -349,7 +386,13 @@ class MainWindow(QMainWindow):
     def _populate_category_pages(self) -> None:
         items = self._analysis_items()
         for index, (category, table) in self.category_pages.items():
-            table.set_items(filter_analysis_items(items, category=category))
+            if isinstance(table, list):
+                for sub_table in table:
+                    sub_table.set_events(self.result.events)
+            elif isinstance(table, WindowsEventTable):
+                table.set_events(self.result.events)
+            else:
+                table.set_items(filter_analysis_items(items, category=category))
 
     def _analysis_items(self) -> list[AlertItem | SummaryItem]:
         severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
@@ -410,7 +453,7 @@ class MainWindow(QMainWindow):
         self.result.events.clear()
         self.result.timeline.clear()
         self.result.risk_score = 0
-        self.summary_label.setText("分析项: 0 | 异常项: 0")
+        self.summary_label.setText("事件数: 0 | 分析项: 0 | 异常项: 0")
         self.overview.set_items([])
         self.raw_log_table.set_events([])
         self.timeline_view.set_timeline([])

@@ -10,7 +10,12 @@ from core.time_range import TimeRange
 from parsers.windows_event_parser import WindowsEventParser
 
 
-POWERSHELL_UTF8_PREFIX = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;"
+POWERSHELL_UTF8_PREFIX = (
+    "$env:HostLogInsightCollector='1';"
+    "$HostLogInsightCollector='HostLogInsightCollector';"
+    "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;"
+    "$OutputEncoding=[System.Text.Encoding]::UTF8;"
+)
 
 
 class WindowsEventCollector(Collector):
@@ -38,7 +43,7 @@ class WindowsEventCollector(Collector):
             "Get-WinEvent -FilterHashtable $filter -MaxEvents 2000 -ErrorAction Stop | "
             "Select-Object TimeCreated,Id,ProviderName,LogName,LevelDisplayName,Message,@{Name='Xml';Expression={$_.ToXml()}} | ConvertTo-Json -Compress"
         )
-        code, out, err = run_command(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], timeout=120)
+        code, out, err = run_command(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], timeout=120)
         if code != 0:
             message = err or out or "Get-WinEvent failed."
             if self._is_empty_or_missing_channel(message):
@@ -79,7 +84,7 @@ class WindowsEventCollector(Collector):
             f"Get-WinEvent -Path '{evtx_path}' -ErrorAction Stop | Where-Object {{$_.TimeCreated -ge [datetime]'{start}' -and $_.TimeCreated -le [datetime]'{end}'}} | "
             "Select-Object TimeCreated,Id,ProviderName,LogName,LevelDisplayName,Message,@{Name='Xml';Expression={$_.ToXml()}} | ConvertTo-Json -Compress"
         )
-        code, out, err = run_command(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], timeout=180)
+        code, out, err = run_command(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], timeout=180)
         if code != 0:
             self.mark_error(source, "unavailable", err or out or "Get-WinEvent -Path failed.")
             return []

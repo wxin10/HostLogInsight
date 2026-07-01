@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QTextEdit, QVBoxLayout, QWidget
 
-from core.models import AlertItem, Finding, SummaryItem
+from core.models import AlertItem, Finding, LogEvent, SummaryItem
+from core.windows_events import description as windows_description
+from core.windows_events import event_result, event_type, source_ip_display, value
 
 
 class FindingDetail(QWidget):
@@ -13,9 +15,12 @@ class FindingDetail(QWidget):
         self.text.setReadOnly(True)
         layout.addWidget(self.text)
 
-    def set_item(self, item: SummaryItem | AlertItem | Finding | None) -> None:
+    def set_item(self, item: SummaryItem | AlertItem | Finding | LogEvent | None) -> None:
         if not item:
             self.text.clear()
+            return
+        if isinstance(item, LogEvent):
+            self.set_event(item)
             return
         if isinstance(item, Finding):
             self.set_finding(item)
@@ -54,6 +59,31 @@ class FindingDetail(QWidget):
             f"{finding.description}\n\n"
             f"处置建议:\n{finding.recommendation}\n\n"
             f"原始日志证据:\n{evidence}"
+        )
+
+    def set_event(self, event: LogEvent | None) -> None:
+        if not event:
+            self.text.clear()
+            return
+        data = event.attributes.get("event_data", {})
+        fields = "\n".join(f"{key}: {val}" for key, val in data.items()) if isinstance(data, dict) else ""
+        self.text.setPlainText(
+            f"{event_type(event)}\n\n"
+            f"时间: {event.timestamp or '未知'}\n"
+            f"EventID: {event.event_id or '未知'}\n"
+            f"通道: {event.channel or '未知'}\n"
+            f"提供程序: {event.provider or '未知'}\n"
+            f"主机: {event.host or '未知'}\n"
+            f"用户: {value(event.user)}\n"
+            f"域: {value(event.domain)}\n"
+            f"源 IP: {source_ip_display(event)}\n"
+            f"登录类型: {value(event.logon_type)}\n"
+            f"进程: {value(event.process_name)}\n"
+            f"命令行: {value(event.command_line)}\n"
+            f"结果: {event_result(event)}\n\n"
+            f"说明:\n{windows_description(event)}\n\n"
+            f"结构化字段:\n{fields or '未知'}\n\n"
+            f"原始证据:\n{event.raw or event.message}"
         )
 
 

@@ -7,6 +7,7 @@ from typing import Iterable
 
 from core.models import AlertItem, Finding, LogEvent, SummaryItem
 from core.utils import first_ip
+from core.windows_events import is_collector_noise, is_powershell_event, is_suspicious_powershell
 
 
 UNKNOWN = "未知"
@@ -43,7 +44,7 @@ def build_analysis_items(events: list[LogEvent], findings: list[Finding] | None 
 
 
 def build_windows_system_summaries(events: list[LogEvent], alerts: list[AlertItem]) -> list[SummaryItem]:
-    windows_events = [event for event in events if event.os_type == "windows" or event.source_type == "windows_event"]
+    windows_events = [event for event in events if (event.os_type == "windows" or event.source_type == "windows_event") and not is_collector_noise(event)]
     buckets: dict[str, list[LogEvent]] = {
         "powershell": [],
         "process": [],
@@ -57,7 +58,7 @@ def build_windows_system_summaries(events: list[LogEvent], alerts: list[AlertIte
         text = _event_text(event)
         channel = (event.channel or "").lower()
         provider = (event.provider or "").lower()
-        if "powershell" in channel or "powershell" in provider or "powershell" in text or "scriptblock" in text:
+        if is_powershell_event(event):
             buckets["powershell"].append(event)
         if event.event_id == "4688" or event.process_name or event.command_line:
             buckets["process"].append(event)
@@ -103,11 +104,7 @@ def build_windows_system_summaries(events: list[LogEvent], alerts: list[AlertIte
                 )
             )
 
-    suspicious_powershell = [
-        event
-        for event in buckets["powershell"]
-        if any(token in _event_text(event) for token in ["encodedcommand", "-enc", "frombase64string", "iex", "downloadstring", "bypass"])
-    ]
+    suspicious_powershell = [event for event in buckets["powershell"] if is_suspicious_powershell(event)]
     for subject, group in _group_by(suspicious_powershell, _system_subject).items():
         alerts.append(
             _alert(

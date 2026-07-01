@@ -8,6 +8,21 @@ from core.filters import filter_analysis_items
 from core.path_discovery import PathDiscovery
 from core.storage import SQLiteStorage
 from core.time_range import TimeRange
+from core.windows_events import (
+    count_by_type,
+    description,
+    event_result,
+    event_type,
+    is_collector_noise,
+    is_log_clear_event,
+    is_login_event,
+    is_rdp_event,
+    is_service_event,
+    is_suspicious_powershell,
+    is_task_event,
+    source_ip_display,
+    value,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -92,6 +107,9 @@ def run_cli(argv: list[str] | None = None) -> int:
         print(f"  Top URL={web['top_url'][:5]}")
         print("")
 
+    _print_windows_sections(result.events, args.max_findings)
+    print("")
+
     print("异常行为摘要:")
     if not alert_items:
         print("  未发现达到阈值的异常行为。")
@@ -115,6 +133,51 @@ def run_cli(argv: list[str] | None = None) -> int:
         print("")
         print(f"Saved session: {session_id} ({args.db})")
     return 0
+
+
+def _print_windows_sections(events: list, limit: int) -> None:
+    windows_events = [event for event in events if event.source_type == "windows_event" and not is_collector_noise(event)]
+    login_events = [event for event in windows_events if is_login_event(event)]
+    rdp_events = [event for event in windows_events if is_rdp_event(event)]
+    suspicious_ps = [event for event in windows_events if is_suspicious_powershell(event)]
+    service_events = [event for event in windows_events if is_service_event(event)]
+    task_events = [event for event in windows_events if is_task_event(event)]
+    clear_events = [event for event in windows_events if is_log_clear_event(event)]
+
+    print("Windows 登录事件统计:")
+    if not login_events:
+        print("  未解析到登录事件，可能未以管理员身份运行、Security 日志不可读、时间范围内无相关事件或审计策略未启用。")
+    for name, count in count_by_type(login_events):
+        print(f"  {name}: {count}")
+    for event in login_events[:limit]:
+        print(f"  {_event_time(event)} {event_type(event)} EventID={event.event_id} 用户={value(event.user)} 域={value(event.domain)} 源IP={source_ip_display(event)} 登录类型={value(event.logon_type)} 结果={event_result(event)}")
+    print("")
+
+    print("RDP 事件统计:")
+    if not rdp_events:
+        print("  未解析到 RDP 相关事件。")
+    for name, count in count_by_type(rdp_events):
+        print(f"  {name}: {count}")
+    for event in rdp_events[:limit]:
+        print(f"  {_event_time(event)} {event_type(event)} EventID={event.event_id} 用户={value(event.user)} 客户端={source_ip_display(event)} 结果={event_result(event)}")
+    print("")
+
+    print("PowerShell 可疑行为:")
+    if not suspicious_ps:
+        print("  未发现命中可疑特征的 PowerShell 行为。")
+    for event in suspicious_ps[:limit]:
+        print(f"  {_event_time(event)} EventID={event.event_id} 用户={value(event.user)} 进程={value(event.process_name)} 说明={description(event)}")
+    print("")
+
+    print("服务/计划任务/日志清除事件:")
+    for label, group in [("服务事件", service_events), ("计划任务事件", task_events), ("日志清除事件", clear_events)]:
+        print(f"  {label}: {len(group)}")
+        for event in group[: min(limit, 5)]:
+            print(f"    {_event_time(event)} {event_type(event)} EventID={event.event_id} 用户={value(event.user)} 说明={description(event)}")
+
+
+def _event_time(event) -> str:
+    return event.timestamp.strftime("%Y-%m-%d %H:%M:%S") if event.timestamp else "未知"
 
 
 def _sort_items(items: list) -> list:
