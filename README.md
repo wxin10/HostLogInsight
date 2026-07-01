@@ -1,25 +1,58 @@
 # HostLogInsight
 
-HostLogInsight is a local Windows/Linux host log analysis tool for incident response, host auditing, forensic triage, web log review, and suspicious behavior discovery. It does not upload logs or depend on cloud services.
+HostLogInsight is a local Windows/Linux host log analysis tool for incident response, host auditing, forensic triage, web log review, and suspicious behavior discovery. It runs locally and does not upload logs or require cloud services.
+
+The current UI focuses on:
+
+- event count
+- analysis item count
+- abnormal item count
+- structured module tables
+- evidence backtracking
+
+Risk score and confidence are no longer the primary workflow. The GUI and CLI now prefer readable summaries, categorized Windows event views, and raw logs as evidence.
 
 ## Features
 
 - Cross-platform CLI and PySide6 GUI.
 - Default path discovery from `resources/default_paths.yaml`.
-- Automatic discovery plus user-added files and directories.
+- User-added files, directories, and glob paths.
 - Time range filtering: last `1h`, `6h`, `24h`, `7d`, `30d`, or custom start/end.
-- Windows Event Log collection through PowerShell `Get-WinEvent`.
+- Windows Event Log collection through PowerShell `Get-WinEvent` with XML output.
+- Windows Security log preflight check for 4624 readability.
+- Security channel batching by EventID for `4624`, `4625`, `4648`, `4672`, `4778`, and `4779`.
 - Linux journal collection through `journalctl`.
-- Streaming file collection with `utf-8`, `gbk`, and `latin-1` fallback.
+- Streaming text log collection with `utf-8`, `gbk`, and `latin-1` fallback.
 - Parsers for Windows events, Linux syslog/auth logs, Nginx, Apache, IIS, Tomcat, MSSQL, MySQL, PostgreSQL, and generic text.
-- Security analyzers for Windows login/bruteforce/RDP/users/services/tasks/PowerShell/process/Defender/log tamper, Linux SSH/sudo/users/persistence/log tamper, web attacks, and database attacks.
-- YAML rule engine with threshold support.
-- Risk score, timeline, evidence, and SQLite session saving.
-- GUI source grouping, source status filters, and finding filters.
-- Offline `.evtx` import on Windows through `Get-WinEvent -Path`; other platforms mark EVTX sources as unsupported.
-- Web summary statistics for top IPs, URLs, status codes, user agents, 404/5xx/POST counts, and suspicious request count.
+- Aggregated summaries and alerts for Windows, Linux, web, and database logs.
+- SQLite session saving.
+- Offline `.evtx` import on Windows through `Get-WinEvent -Path`.
 
-HTML, PDF, and CSV report export are intentionally not implemented in this first phase.
+## Windows Analysis
+
+Windows analysis is organized by event type instead of generic activity rows:
+
+- Windows login analysis: `4624`, `4625`, `4648`, `4672`
+- RDP analysis: `4624/4625 LogonType=10`, `1149`, `4778`, `4779`, `21`, `22`, `24`, `25`
+- PowerShell analysis: raw behavior summary and suspicious behavior
+- Service analysis: `7045`, `7036`, `7040`
+- Scheduled task analysis: `4698`, `4702`, `106`, `140`
+- Process creation: `4688`
+- Log clearing: `1102`, `104`
+
+Windows event parsing uses XML `EventData` first, then falls back to message text. Fields include user, domain, source IP, workstation/client, logon type, process, command line, channel, EventID, and raw evidence.
+
+### Administrator Rights
+
+On Windows, run HostLogInsight as Administrator when analyzing Security logs. Without Administrator rights, `4624`, `4625`, `4648`, and `4672` may be empty or incomplete.
+
+At analysis start, HostLogInsight checks:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624} -MaxEvents 1
+```
+
+The GUI status area shows whether the Security log is readable. If it is not readable, the status and CLI output explain whether the likely cause is permission denial, unavailable log, or no matching events.
 
 ## Install
 
@@ -37,112 +70,119 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Run
+## Common Commands
 
-GUI:
+Start the GUI:
 
 ```bash
 python main.py --gui
 ```
 
-CLI:
+Run a 24 hour CLI analysis:
 
 ```bash
 python main.py --cli --last 24h
-python main.py --cli --last 7d
-python main.py --cli --start "2025-01-01 00:00:00" --end "2025-01-02 00:00:00"
-python main.py --cli --add-path /var/log/nginx
-python main.py --cli --add-path C:\inetpub\logs\LogFiles
-python main.py --cli --os windows --source system
-python main.py --cli --os linux --source web --save
-python main.py --cli --list-sources
-python main.py --cli --last 7d --severity high --category web_attack
-python main.py --cli --add-path /var/log/nginx --keyword sqlmap
+```
+
+List discovered sources:
+
+```bash
+python main.py --cli --last 24h --list-sources
+```
+
+Analyze only system sources. This includes Windows Event Logs and Linux journal sources, not ordinary text files:
+
+```bash
+python main.py --cli --last 24h --source system
+```
+
+Increase Windows Event Log query depth:
+
+```bash
+python main.py --cli --last 24h --max-events 20000
+```
+
+Analyze a custom time range:
+
+```bash
+python main.py --cli --start "2026-01-01 00:00:00" --end "2026-01-02 00:00:00"
+```
+
+Add extra paths:
+
+```bash
+python main.py --cli --add-path C:\inetpub\logs\LogFiles --last 24h
+python main.py --cli --add-path "/var/log/nginx/*.log" --source web
 python main.py --cli --add-path "./Security.evtx" --last 30d
-python main.py --cli --add-path "/var/log/nginx/*.log" --source web
 ```
 
-Linux GUI mode requires a desktop environment and Qt-compatible display session. On headless servers, use CLI mode.
+## Troubleshooting
 
-## CLI Options
-
-- `--list-sources`: discover and print sources without running analysis.
-- `--severity critical|high|medium|low|info`: display only matching findings.
-- `--category web_attack|database_attack|authentication|bruteforce|rdp|ssh|privilege|service|task|powershell|process|defender|log_tamper|persistence`: display matching finding categories.
-- `--keyword TEXT`: search finding title, description, user, source IP, and raw evidence.
-- `--max-findings N`: limit finding output.
-- `--max-file-mb N`: set text log file size limit.
-- `--debug`: print source attributes and more warnings.
-
-## Adding Paths
-
-Add a file:
+Check PySide6:
 
 ```bash
-python main.py --cli --add-path /var/log/auth.log --last 24h
+python -c "from PySide6.QtWidgets import QApplication; print('QtWidgets OK')"
 ```
 
-Add a directory:
+Check Windows Security readability manually:
+
+```powershell
+Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624} -MaxEvents 1
+```
+
+Run CLI with more source details:
 
 ```bash
-python main.py --cli --add-path /var/log/nginx --source web --last 7d
+python main.py --cli --last 24h --debug
 ```
 
-Add a glob:
+If login analysis is empty on Windows:
 
-```bash
-python main.py --cli --add-path "/var/log/nginx/*.log" --source web
-python main.py --cli --add-path "C:\inetpub\logs\LogFiles\*\*.log" --source web
-```
+- run the terminal as Administrator
+- verify the Security log is readable
+- check whether the selected time range contains 4624/4625 events
+- confirm the relevant Windows audit policy is enabled
+- increase `--max-events` if the Security log is very busy
 
-User-added GUI paths are stored locally:
+If PowerShell noise appears:
 
-- Windows: `%APPDATA%\HostLogInsight\user_paths.json`
-- Linux: `~/.config/HostLogInsight/user_paths.json`
+- HostLogInsight marks its own Get-WinEvent collection commands with `HostLogInsightCollector`
+- `Get-WinEvent`, `Get-CimInstance`, `ConvertTo-Json`, and the collector command line are filtered from suspicious PowerShell results
+- normal PowerShell engine lifecycle events such as `400`, `403`, and `600` are not treated as suspicious by themselves
 
 ## EVTX Offline Import
 
-`.evtx` files are discovered as Windows event sources. On Windows, HostLogInsight calls PowerShell `Get-WinEvent -Path <file.evtx>` and applies the selected time range. On Linux or other platforms, EVTX sources are marked `unsupported` with a clear status message; analysis does not crash.
+`.evtx` files are discovered as Windows event sources. On Windows, HostLogInsight calls:
+
+```powershell
+Get-WinEvent -Path <file.evtx>
+```
+
+and applies the selected time range. On Linux or other platforms, EVTX sources are marked `unsupported` and analysis continues.
 
 ## Web Log Analysis
 
 Supported web formats include IIS W3C, Nginx/Apache combined access logs, and Tomcat access logs. Parsed fields include timestamp, source IP, method, URL, status code, User-Agent, Referer, response size, HTTP version, request time when present, source path, and raw evidence.
 
-Web analyzers detect suspicious POSTs, administrative/sensitive paths, high-risk extensions, SQL injection, command injection, path traversal, WebShell indicators, scanner User-Agents, high URL fan-out, large 404 bursts, and 5xx spikes.
+Web analysis summarizes top IPs, top URLs, status code distribution, suspicious paths, SQL injection, XSS, command injection, path traversal, scanner User-Agents, 404 bursts, and 5xx spikes.
 
 ## Database Log Analysis
 
-MSSQL, MySQL/MariaDB, and PostgreSQL analyzers detect authentication failure bursts, privileged account brute force (`sa`, `root`, `postgres`), high-risk command execution features, privilege changes, export/read primitives, backup/restore operations, and suspicious administrative activity.
-
-## Packaging Notes
-
-Windows:
-
-```bash
-pyinstaller --noconfirm --onefile --windowed main.py --name HostLogInsight
-```
-
-Linux CLI:
-
-```bash
-pyinstaller --noconfirm --onefile main.py --name HostLogInsight
-```
-
-Linux GUI can later be packaged as AppImage, deb, or rpm.
+MSSQL, MySQL/MariaDB, and PostgreSQL analysis summarizes authentication failures, privileged account behavior, permission changes, export/backup activity, risky commands, and suspicious administrative actions.
 
 ## Project Layout
 
 ```text
 core/         shared models, time ranges, discovery, rules, storage, engine
 collectors/   Windows Event Log, Linux journal, and file collectors
-parsers/      line parsers that normalize logs to LogEvent
-analyzers/    security detection modules
+parsers/      parsers that normalize logs to LogEvent
+analyzers/    focused abnormal behavior modules
 gui/          PySide6 desktop interface
 rules/        YAML rules
 resources/    default path configuration
-tests/        pytest coverage for core behavior
+tests/        pytest coverage
 ```
 
 ## Safety
 
-The tool catches missing paths, permission errors, parsing failures, and collector failures. Log source status is preserved so the operator can see which sources were unavailable, denied, or partially parsed.
+HostLogInsight catches missing paths, permission errors, parsing failures, and collector failures. Source status is preserved so the operator can see which sources were available, skipped, denied, or partially parsed.

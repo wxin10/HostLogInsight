@@ -48,10 +48,12 @@ from core.timeline import build_timeline
 
 
 class AnalysisEngine:
-    def __init__(self, path_discovery: PathDiscovery | None = None, max_file_mb: int = 512) -> None:
+    def __init__(self, path_discovery: PathDiscovery | None = None, max_file_mb: int = 512, max_events: int = 10000) -> None:
         self.path_discovery = path_discovery or PathDiscovery(max_file_mb=max_file_mb)
         self.max_file_mb = max_file_mb
-        self.collectors = [WindowsEventCollector(), LinuxJournalCollector(), FileCollector(max_file_mb=max_file_mb)]
+        self.max_events = max_events
+        self.windows_collector = WindowsEventCollector(max_events=max_events)
+        self.collectors = [self.windows_collector, LinuxJournalCollector(), FileCollector(max_file_mb=max_file_mb)]
         self.analyzers = [
             WindowsLoginAnalyzer(),
             WindowsBruteforceAnalyzer(),
@@ -94,6 +96,11 @@ class AnalysisEngine:
         result.sources = sources or self.path_discovery.discover(selected_os, add_paths)
         if source_filter:
             result.sources = [source for source in result.sources if self._source_matches(source, source_filter)]
+        windows_security_check = {}
+        if current_os() == "windows" and any(source.enabled and source.source_type == "windows_event" and (source.channel or "").lower() == "security" for source in result.sources):
+            windows_security_check = self.windows_collector.preflight_security_log()
+            if windows_security_check and not windows_security_check.get("ok"):
+                result.errors.append(str(windows_security_check.get("message") or "Security 日志读取失败。"))
         for collector in self.collectors:
             try:
                 collector.errors.clear()
@@ -113,6 +120,8 @@ class AnalysisEngine:
         result.timeline = build_timeline(result.events, result.findings)
         result.risk_score = self.risk_scorer.score(result.findings)
         result.stats = build_stats(result.events, result.findings)
+        if windows_security_check:
+            result.stats["windows_security_check"] = windows_security_check
         result.summaries, result.alerts = build_analysis_items(result.events, result.findings)
         result.stats.update(
             {
@@ -130,7 +139,7 @@ class AnalysisEngine:
     def _source_matches(self, source: LogSource, source_filter: str) -> bool:
         low = source_filter.lower()
         if low == "system":
-            return source.source_type in {"windows_event", "linux_journal", "file"}
+            return source.source_type in {"windows_event", "linux_journal"}
         if low == "web":
             return source.source_type == "web"
         if low == "database":

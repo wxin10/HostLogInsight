@@ -310,10 +310,21 @@ class MainWindow(QMainWindow):
         self._refresh_status()
 
     def _refresh_status(self) -> None:
-        warning = ""
+        parts = [f"系统: {current_os()}", f"主机: {host_name()}", f"用户: {current_user()}", f"管理员权限: {is_admin()}", f"时间范围: {self.time_range.label()}"]
         if current_os() == "windows" and not is_admin():
-            warning = " | 当前未以管理员身份运行，Security 登录日志可能读取不完整"
-        self.status_label.setText(f"系统: {current_os()} | 主机: {host_name()} | 用户: {current_user()} | 管理员权限: {is_admin()} | 时间范围: {self.time_range.label()}{warning}")
+            parts.append("当前未以管理员身份运行，Security 登录日志可能读取不完整")
+        security_text = self._security_status_text()
+        if security_text:
+            parts.append(security_text)
+        self.status_label.setText(" | ".join(parts))
+
+    def _security_status_text(self) -> str:
+        check = self.result.stats.get("windows_security_check") if self.result and self.result.stats else None
+        if not check:
+            return ""
+        if check.get("ok"):
+            return "Security 日志可读"
+        return str(check.get("message") or "Security 日志读取失败")
 
     def rescan_sources(self) -> None:
         if self.scan_thread and self.scan_thread.isRunning():

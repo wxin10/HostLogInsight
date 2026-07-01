@@ -40,6 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--category", help="Only display findings matching category alias, such as web_attack or database_attack")
     parser.add_argument("--keyword", help="Only display findings containing keyword")
     parser.add_argument("--max-findings", type=int, default=20, help="Maximum analysis items to print")
+    parser.add_argument("--max-events", type=int, default=10000, help="Maximum Windows events to read per query")
     parser.add_argument("--max-file-mb", type=int, default=512, help="Maximum file size in MB for text log collection")
     parser.add_argument("--debug", action="store_true", help="Print detailed warnings and source attributes")
     parser.add_argument("--save", action="store_true", help="Save current session to SQLite")
@@ -74,7 +75,7 @@ def run_cli(argv: list[str] | None = None) -> int:
             print(f"[{source.status}] {source.source_type} {source.parser} {source.discovered_by}: {name}{suffix}")
         return 0
 
-    engine = AnalysisEngine(path_discovery=discovery, max_file_mb=args.max_file_mb)
+    engine = AnalysisEngine(path_discovery=discovery, max_file_mb=args.max_file_mb, max_events=args.max_events)
     result = engine.run(time_range, os_type=args.os, source_filter=args.source, add_paths=args.add_path)
     visible_items = filter_analysis_items([*result.alerts, *result.summaries], args.severity, args.category, args.keyword)
     alert_items = [item for item in visible_items if hasattr(item, "severity")]
@@ -88,6 +89,9 @@ def run_cli(argv: list[str] | None = None) -> int:
     print(f"  分析项数量: {len(result.summaries)}")
     print(f"  异常项数量: {len(result.alerts)}")
     print(f"  关键证据数量: {sum(len(item.evidence) for item in [*result.summaries, *result.alerts])}")
+    security_check = result.stats.get("windows_security_check", {})
+    if security_check:
+        print(f"  Security 日志状态: {security_check.get('message')}")
     print("")
     print("日志源:")
     for source in result.sources[:200]:
