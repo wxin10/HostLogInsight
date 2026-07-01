@@ -92,6 +92,13 @@ def run_cli(argv: list[str] | None = None) -> int:
     security_check = result.stats.get("windows_security_check", {})
     if security_check:
         print(f"  Security 日志状态: {security_check.get('message')}")
+        print(
+            "  Security 自检详情: "
+            f"readable={security_check.get('readable')} "
+            f"has_4624_in_range={security_check.get('has_4624_in_range')} "
+            f"count_4624={security_check.get('count_4624', 0)} "
+            f"count_4625={security_check.get('count_4625', 0)}"
+        )
     print("")
     print("日志源:")
     for source in result.sources[:200]:

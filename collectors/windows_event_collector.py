@@ -41,9 +41,10 @@ class WindowsEventCollector(Collector):
                 events.extend(self.collect_channel(source, time_range))
         return events
 
-    def preflight_security_log(self) -> dict[str, str | bool]:
+    def preflight_security_log(self, time_range: TimeRange) -> dict[str, str | bool | int]:
+        base = {"readable": False, "has_4624_in_range": False, "count_4624": 0, "count_4625": 0}
         if current_os() != "windows":
-            return {"ok": False, "status": "skipped", "reason": "not_windows", "message": "当前系统不是 Windows，未执行 Security 日志自检。"}
+            return {**base, "ok": False, "status": "skipped", "reason": "not_windows", "message": "当前系统不是 Windows，未执行 Security 日志自检。"}
         script = (
             POWERSHELL_UTF8_PREFIX
             + "$ErrorActionPreference='Stop';"
@@ -53,10 +54,59 @@ class WindowsEventCollector(Collector):
         )
         code, out, err = run_command(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], timeout=60)
         if code == 0 and out.strip():
-            return {"ok": True, "status": "readable", "reason": "ok", "message": "Security 日志可读。"}
+            counts = self.count_security_logons(time_range)
+            return {
+                **base,
+                **counts,
+                "ok": True,
+                "readable": True,
+                "status": "readable",
+                "reason": "ok",
+                "message": self._security_count_message(True, counts),
+            }
         message = (err or out or "Security 4624 自检未返回事件。").strip()
         reason = self._classify_security_check_failure(message)
-        return {"ok": False, "status": "failed", "reason": reason, "message": self._friendly_security_check_message(reason, message)}
+        counts = self.count_security_logons(time_range) if reason == "no_events" else {}
+        return {
+            **base,
+            **counts,
+            "ok": False,
+            "readable": False,
+            "status": "failed",
+            "reason": reason,
+            "message": self._friendly_security_check_message(reason, message, counts),
+        }
+
+    def count_security_logons(self, time_range: TimeRange) -> dict[str, int | bool]:
+        counts: dict[str, int | bool] = {"count_4624": 0, "count_4625": 0, "has_4624_in_range": False}
+        for event_id in ["4624", "4625"]:
+            count = self._count_security_event_id(event_id, time_range)
+            counts[f"count_{event_id}"] = count
+        counts["has_4624_in_range"] = int(counts["count_4624"]) > 0
+        return counts
+
+    def _count_security_event_id(self, event_id: str, time_range: TimeRange) -> int:
+        start = time_range.start_time.strftime("%Y-%m-%dT%H:%M:%S")
+        end = time_range.end_time.strftime("%Y-%m-%dT%H:%M:%S")
+        script = (
+            POWERSHELL_UTF8_PREFIX
+            + "$ErrorActionPreference='Stop';"
+            f"$filter=@{{LogName='Security'; Id={event_id}; StartTime=[datetime]'{start}'; EndTime=[datetime]'{end}'}};"
+            "$events=Get-WinEvent -FilterHashtable $filter -MaxEvents "
+            + str(self.max_events)
+            + " -ErrorAction Stop;"
+            "$events.Count"
+        )
+        code, out, err = run_command(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], timeout=90)
+        if code != 0:
+            message = err or out or ""
+            if self._is_empty_or_missing_channel(message):
+                return 0
+            return 0
+        try:
+            return int(str(out).strip() or "0")
+        except ValueError:
+            return 0
 
     def collect_channel(self, source: LogSource, time_range: TimeRange) -> list[LogEvent]:
         return self._collect_with_filter(source, time_range, f"$filter=@{{LogName='{source.channel}'; StartTime=[datetime]'{{start}}'; EndTime=[datetime]'{{end}}'}};", self.max_events)
@@ -191,14 +241,23 @@ class WindowsEventCollector(Collector):
             return "unavailable"
         return "unknown_error"
 
-    def _friendly_security_check_message(self, reason: str, message: str) -> str:
+    def _friendly_security_check_message(self, reason: str, message: str, counts: dict | None = None) -> str:
         if reason == "permission_denied":
             return "Security 日志读取失败：权限不足。请以管理员身份运行，否则 4624/4625/4648/4672 可能为空。"
         if reason == "no_events":
-            return "Security 日志读取失败：未找到 4624 事件，可能时间范围内无登录成功事件或审计策略未启用。"
+            return self._security_count_message(False, counts or {})
         if reason == "unavailable":
             return "Security 日志读取失败：日志不可用或当前系统未启用。"
         return f"Security 日志读取失败：{message}"
+
+    def _security_count_message(self, readable: bool, counts: dict) -> str:
+        count_4624 = int(counts.get("count_4624", 0) or 0)
+        count_4625 = int(counts.get("count_4625", 0) or 0)
+        if readable and count_4624 > 0:
+            return f"Security 日志状态：可读；当前时间范围 4624={count_4624}，4625={count_4625}。"
+        if readable:
+            return f"Security 日志状态：可读；当前时间范围无登录成功事件，4624={count_4624}，4625={count_4625}。"
+        return f"Security 日志读取失败：当前时间范围无登录成功事件，4624={count_4624}，4625={count_4625}。"
 
     def _dedupe_key(self, event: LogEvent) -> str:
         record_id = event.attributes.get("RecordId") or event.attributes.get("EventRecordID")

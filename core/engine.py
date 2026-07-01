@@ -98,7 +98,7 @@ class AnalysisEngine:
             result.sources = [source for source in result.sources if self._source_matches(source, source_filter)]
         windows_security_check = {}
         if current_os() == "windows" and any(source.enabled and source.source_type == "windows_event" and (source.channel or "").lower() == "security" for source in result.sources):
-            windows_security_check = self.windows_collector.preflight_security_log()
+            windows_security_check = self.windows_collector.preflight_security_log(time_range)
             if windows_security_check and not windows_security_check.get("ok"):
                 result.errors.append(str(windows_security_check.get("message") or "Security 日志读取失败。"))
         for collector in self.collectors:

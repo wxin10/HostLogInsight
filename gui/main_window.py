@@ -36,6 +36,7 @@ from gui.settings_dialog import SettingsDialog
 from gui.time_range_panel import TimeRangePanel
 from gui.timeline_view import TimelineView
 from gui.windows_event_table import WindowsEventTable
+from gui.windows_event_table import format_security_status
 
 
 class SourceScanWorker(QObject):
@@ -322,9 +323,7 @@ class MainWindow(QMainWindow):
         check = self.result.stats.get("windows_security_check") if self.result and self.result.stats else None
         if not check:
             return ""
-        if check.get("ok"):
-            return "Security 日志可读"
-        return str(check.get("message") or "Security 日志读取失败")
+        return format_security_status(check)
 
     def rescan_sources(self) -> None:
         if self.scan_thread and self.scan_thread.isRunning():
@@ -401,6 +400,8 @@ class MainWindow(QMainWindow):
                 for sub_table in table:
                     sub_table.set_events(self.result.events)
             elif isinstance(table, WindowsEventTable):
+                if index == 3:
+                    table.set_security_check(self.result.stats.get("windows_security_check"))
                 table.set_events(self.result.events)
             else:
                 table.set_items(filter_analysis_items(items, category=category))

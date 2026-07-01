@@ -31,9 +31,13 @@ class WindowsEventTable(QTableWidget):
         columns = columns_for_mode(mode)
         super().__init__(0, len(columns))
         self.events: list[LogEvent] = []
+        self.security_check: dict | None = None
         self.setHorizontalHeaderLabels(columns)
         self.horizontalHeader().setStretchLastSection(True)
         self.itemSelectionChanged.connect(self._emit_selected)
+
+    def set_security_check(self, security_check: dict | None) -> None:
+        self.security_check = security_check
 
     def set_events(self, events: list[LogEvent]) -> None:
         self.events = [event for event in events if include_event(self.mode, event)]
@@ -51,7 +55,8 @@ class WindowsEventTable(QTableWidget):
         self.setColumnCount(1)
         self.setHorizontalHeaderLabels(["说明"])
         self.setRowCount(1)
-        self.setItem(0, 0, QTableWidgetItem("未解析到登录事件，可能原因包括未以管理员身份运行、Security 日志不可读、时间范围内无相关事件或审计策略未启用。"))
+        status = format_security_status(self.security_check) if self.security_check else "Security 日志状态：未知。"
+        self.setItem(0, 0, QTableWidgetItem(f"未解析到登录事件，可能原因包括未以管理员身份运行、Security 日志不可读、时间范围内无相关事件或审计策略未启用。\n{status}"))
 
     def _emit_selected(self) -> None:
         row = self.currentRow()
@@ -185,3 +190,22 @@ def event_time(event: LogEvent) -> str:
 
 def display(text) -> str:
     return value(str(text) if text is not None else "")
+
+
+def format_security_status(check: dict | None) -> str:
+    if not check:
+        return ""
+    count_4624 = int(check.get("count_4624", 0) or 0)
+    count_4625 = int(check.get("count_4625", 0) or 0)
+    reason = str(check.get("reason", ""))
+    if check.get("readable") or check.get("ok"):
+        state = "可读" if check.get("has_4624_in_range") else "当前时间范围无登录事件"
+    elif reason == "permission_denied":
+        state = "权限不足"
+    elif reason == "no_events":
+        state = "当前时间范围无登录事件"
+    elif reason == "unavailable":
+        state = "日志不可用"
+    else:
+        state = "读取失败"
+    return f"Security 日志状态：{state}；4624={count_4624}，4625={count_4625}。{check.get('message') or ''}"

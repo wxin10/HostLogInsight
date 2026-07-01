@@ -1,9 +1,9 @@
 rules:
   - id: win_failed_logon_burst
-    title: Windows failed logon burst
-    description: Multiple failed Windows logons from the same IP.
+    title: Windows 登录失败集中
+    description: 同一来源 IP 出现多次 Windows 登录失败。
     severity: high
-    category: Windows Bruteforce
+    category: 暴力破解
     tags: [bruteforce]
     group_by: source_ip
     time_window: 10
@@ -11,18 +11,18 @@ rules:
     match:
       event_id: 4625
   - id: powershell_encoded
-    title: Encoded PowerShell command
-    description: PowerShell command contains encoded command indicators.
+    title: PowerShell 编码命令
+    description: PowerShell 命令包含编码执行特征。
     severity: high
     category: PowerShell
     tags: [powershell, suspicious_process]
     match:
       command_contains: [-EncodedCommand, FromBase64String]
   - id: windows_log_cleared
-    title: Windows event log cleared
-    description: Windows audit log clear event observed.
+    title: Windows 事件日志被清除
+    description: 发现 Windows 审计日志清除事件。
     severity: critical
-    category: Log Tamper
+    category: 日志篡改
     tags: [log_tamper]
     match:
       event_id: 1102
