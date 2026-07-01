@@ -121,10 +121,65 @@ class Finding:
 
 
 @dataclass
+class EvidenceItem:
+    event_id: str = ""
+    timestamp: datetime | None = None
+    source: str = ""
+    user: str = ""
+    source_ip: str = ""
+    target: str = ""
+    raw: str = ""
+    summary: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["timestamp"] = self.timestamp.isoformat() if self.timestamp else None
+        return data
+
+
+@dataclass
+class SummaryItem:
+    item_id: str = field(default_factory=lambda: new_id("sum"))
+    category: str = ""
+    subject: str = ""
+    user: str = ""
+    source_ip: str = ""
+    target: str = ""
+    count: int = 0
+    success_count: int = 0
+    failure_count: int = 0
+    first_seen: datetime | None = None
+    last_seen: datetime | None = None
+    title: str = ""
+    description: str = ""
+    conclusion: str = ""
+    recommendation: str = ""
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["first_seen"] = self.first_seen.isoformat() if self.first_seen else None
+        data["last_seen"] = self.last_seen.isoformat() if self.last_seen else None
+        return data
+
+
+@dataclass
+class AlertItem(SummaryItem):
+    item_id: str = field(default_factory=lambda: new_id("alt"))
+    severity: str = "medium"
+
+    def to_dict(self) -> dict[str, Any]:
+        return super().to_dict()
+
+
+@dataclass
 class AnalysisResult:
     sources: list[LogSource] = field(default_factory=list)
     events: list[LogEvent] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
+    summaries: list[SummaryItem] = field(default_factory=list)
+    alerts: list[AlertItem] = field(default_factory=list)
     timeline: list[dict[str, Any]] = field(default_factory=list)
     risk_score: int = 0
     errors: list[str] = field(default_factory=list)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core.models import Finding
+from core.models import AlertItem, Finding, SummaryItem
 
 
 CATEGORY_ALIASES = {
@@ -36,5 +36,40 @@ def filter_findings(findings: list[Finding], severity: str | None = None, catego
             text = " ".join([finding.title, finding.description, finding.user, finding.source_ip, evidence]).lower()
             if low in text:
                 filtered.append(finding)
+        result = filtered
+    return result
+
+
+def filter_analysis_items(items: list[SummaryItem | AlertItem], severity: str | None = None, category: str | None = None, keyword: str | None = None) -> list[SummaryItem | AlertItem]:
+    result = items
+    if severity:
+        result = [item for item in result if getattr(item, "severity", "summary").lower() == severity.lower()]
+    if category:
+        needles = CATEGORY_ALIASES.get(category.lower(), [category.lower()])
+        result = [
+            item
+            for item in result
+            if any(needle in item.category.lower() or needle in item.title.lower() or needle in " ".join(item.tags).lower() for needle in needles)
+        ]
+    if keyword:
+        low = keyword.lower()
+        filtered = []
+        for item in result:
+            evidence = " ".join(evidence_item.get("raw", "") for evidence_item in item.evidence)
+            text = " ".join(
+                [
+                    item.title,
+                    item.description,
+                    item.conclusion,
+                    item.recommendation,
+                    item.user,
+                    item.source_ip,
+                    item.target,
+                    item.subject,
+                    evidence,
+                ]
+            ).lower()
+            if low in text:
+                filtered.append(item)
         result = filtered
     return result

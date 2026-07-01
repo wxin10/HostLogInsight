@@ -21,16 +21,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.config import load_user_path_entries, load_user_paths, save_user_path_entries, save_user_paths
+from core.config import load_user_path_entries, save_user_path_entries
 from core.engine import AnalysisEngine
-from core.filters import filter_findings
-from core.models import AnalysisResult
+from core.filters import filter_analysis_items
+from core.models import AlertItem, AnalysisResult, SummaryItem
 from core.platform_utils import current_os, current_user, host_name, is_admin
 from core.storage import SQLiteStorage
 from core.time_range import TimeRange
+from gui.analysis_table import AnalysisTable
 from gui.finding_detail import FindingDetail
-from gui.finding_table import FindingTable
 from gui.log_source_panel import LogSourcePanel
+from gui.raw_log_table import RawLogTable
 from gui.settings_dialog import SettingsDialog
 from gui.time_range_panel import TimeRangePanel
 from gui.timeline_view import TimelineView
@@ -84,7 +85,8 @@ class MainWindow(QMainWindow):
         self.analysis_thread: QThread | None = None
 
         self.status_label = QLabel()
-        self.risk_label = QLabel("风险: 0/100")
+        self.summary_label = QLabel("分析项: 0 | 异常项: 0")
+        self.category_pages: dict[int, tuple[str, AnalysisTable]] = {}
         self._build_toolbar()
         self._build_layout()
         self._refresh_status()
@@ -112,7 +114,18 @@ class MainWindow(QMainWindow):
         save_btn.clicked.connect(self.save_session)
         history_btn = QPushButton("打开历史")
         history_btn.clicked.connect(self.open_history)
-        for widget in [self.analyze_btn, self.stop_btn, rescan_btn, add_file_btn, add_dir_btn, add_glob_btn, clear_btn, save_btn, history_btn, self.risk_label]:
+        for widget in [
+            self.analyze_btn,
+            self.stop_btn,
+            rescan_btn,
+            add_file_btn,
+            add_dir_btn,
+            add_glob_btn,
+            clear_btn,
+            save_btn,
+            history_btn,
+            self.summary_label,
+        ]:
             toolbar.addWidget(widget)
 
     def _build_layout(self) -> None:
@@ -120,8 +133,7 @@ class MainWindow(QMainWindow):
         root_layout = QVBoxLayout(root)
         root_layout.addWidget(self.status_label)
 
-        self.menu = QListWidget()
-        for item in [
+        menu_items = [
             "主机风险概览",
             "日志源管理",
             "时间范围查询",
@@ -141,65 +153,35 @@ class MainWindow(QMainWindow):
             "Linux 持久化分析",
             "Web 日志分析",
             "数据库日志分析",
+            "原始日志",
             "时间线",
             "设置",
-        ]:
+        ]
+        self.menu = QListWidget()
+        for item in menu_items:
             self.menu.addItem(item)
 
         self.stack = QStackedWidget()
-        self.overview = FindingTable()
+        self.overview = AnalysisTable()
         self.source_panel = LogSourcePanel()
         self.time_panel = TimeRangePanel()
+        self.raw_log_table = RawLogTable()
         self.timeline_view = TimelineView()
         self.detail = FindingDetail()
         self.time_panel.changed.connect(self._set_time_range)
-        self.overview.finding_selected.connect(self.detail.set_finding)
+        self.overview.item_selected.connect(self.detail.set_item)
 
-        overview_page = QWidget()
-        overview_layout = QVBoxLayout(overview_page)
-        filter_layout = QHBoxLayout()
-        self.severity_filter = QComboBox()
-        self.severity_filter.addItem("全部", "all")
-        for severity in ["critical", "high", "medium", "low", "info"]:
-            self.severity_filter.addItem(severity, severity)
-        self.category_filter = QComboBox()
-        self.category_filter.addItem("全部", "all")
-        for category in ["authentication", "bruteforce", "rdp", "ssh", "privilege", "service", "task", "powershell", "process", "defender", "log_tamper", "web_attack", "database_attack", "persistence"]:
-            self.category_filter.addItem(category, category)
-        self.keyword_filter = QLineEdit()
-        self.keyword_filter.setPlaceholderText("搜索风险项")
-        self.severity_filter.currentTextChanged.connect(self.apply_finding_filters)
-        self.category_filter.currentTextChanged.connect(self.apply_finding_filters)
-        self.keyword_filter.textChanged.connect(self.apply_finding_filters)
-        filter_layout.addWidget(self.severity_filter)
-        filter_layout.addWidget(self.category_filter)
-        filter_layout.addWidget(self.keyword_filter)
-        overview_layout.addLayout(filter_layout)
-        splitter = QSplitter(Qt.Vertical)
-        splitter.addWidget(self.overview)
-        splitter.addWidget(self.detail)
-        splitter.setSizes([520, 240])
-        overview_layout.addWidget(splitter)
-
-        self.stack.addWidget(overview_page)
+        self.stack.addWidget(self._build_overview_page())
         self.stack.addWidget(self.source_panel)
         self.source_panel.source_toggled.connect(self._source_toggled)
         self.stack.addWidget(self.time_panel)
-        for _ in range(16):
-            page = QWidget()
-            page_layout = QVBoxLayout(page)
-            table = FindingTable()
-            table.finding_selected.connect(self.detail.set_finding)
-            page_layout.addWidget(table)
-            page.table = table
+        for index, category in self._category_map().items():
+            page, table = self._build_category_page()
+            self.category_pages[index] = (category, table)
             self.stack.addWidget(page)
+        self.stack.addWidget(self.raw_log_table)
         self.stack.addWidget(self.timeline_view)
-        settings_page = QWidget()
-        settings_layout = QVBoxLayout(settings_page)
-        settings_btn = QPushButton("打开设置")
-        settings_btn.clicked.connect(lambda: SettingsDialog().exec())
-        settings_layout.addWidget(settings_btn)
-        self.stack.addWidget(settings_page)
+        self.stack.addWidget(self._build_settings_page())
 
         self.menu.currentRowChanged.connect(self.stack.setCurrentIndex)
         self.menu.setCurrentRow(0)
@@ -209,6 +191,86 @@ class MainWindow(QMainWindow):
         body.addWidget(self.stack, 5)
         root_layout.addLayout(body)
         self.setCentralWidget(root)
+
+    def _build_overview_page(self) -> QWidget:
+        overview_page = QWidget()
+        overview_layout = QVBoxLayout(overview_page)
+        filter_layout = QHBoxLayout()
+        self.severity_filter = QComboBox()
+        self.severity_filter.addItem("全部", "all")
+        for severity in ["critical", "high", "medium", "low", "info"]:
+            self.severity_filter.addItem(severity, severity)
+        self.category_filter = QComboBox()
+        self.category_filter.addItem("全部", "all")
+        for label, value in [
+            ("登录/认证", "authentication"),
+            ("暴力破解", "bruteforce"),
+            ("远程桌面", "rdp"),
+            ("权限变更", "privilege"),
+            ("服务", "service"),
+            ("计划任务", "task"),
+            ("PowerShell", "powershell"),
+            ("进程", "process"),
+            ("Defender", "defender"),
+            ("日志篡改", "log_tamper"),
+            ("Linux SSH", "ssh"),
+            ("Linux 提权", "linux_privilege"),
+            ("Web 攻击", "web_attack"),
+            ("数据库", "database_attack"),
+            ("持久化", "persistence"),
+        ]:
+            self.category_filter.addItem(label, value)
+        self.keyword_filter = QLineEdit()
+        self.keyword_filter.setPlaceholderText("搜索风险项")
+        self.severity_filter.currentTextChanged.connect(self.apply_analysis_filters)
+        self.category_filter.currentTextChanged.connect(self.apply_analysis_filters)
+        self.keyword_filter.textChanged.connect(self.apply_analysis_filters)
+        filter_layout.addWidget(self.severity_filter)
+        filter_layout.addWidget(self.category_filter)
+        filter_layout.addWidget(self.keyword_filter)
+        overview_layout.addLayout(filter_layout)
+        splitter = QSplitter(Qt.Vertical)
+        splitter.addWidget(self.overview)
+        splitter.addWidget(self.detail)
+        splitter.setSizes([520, 240])
+        overview_layout.addWidget(splitter)
+        return overview_page
+
+    def _build_category_page(self) -> tuple[QWidget, AnalysisTable]:
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        table = AnalysisTable()
+        table.item_selected.connect(self.detail.set_item)
+        page_layout.addWidget(table)
+        return page, table
+
+    def _build_settings_page(self) -> QWidget:
+        settings_page = QWidget()
+        settings_layout = QVBoxLayout(settings_page)
+        settings_btn = QPushButton("打开设置")
+        settings_btn.clicked.connect(lambda: SettingsDialog().exec())
+        settings_layout.addWidget(settings_btn)
+        return settings_page
+
+    def _category_map(self) -> dict[int, str]:
+        return {
+            3: "authentication",
+            4: "bruteforce",
+            5: "rdp",
+            6: "privilege",
+            7: "service",
+            8: "task",
+            9: "powershell",
+            10: "process",
+            11: "defender",
+            12: "log_tamper",
+            13: "ssh",
+            14: "linux_privilege",
+            15: "privilege",
+            16: "persistence",
+            17: "web",
+            18: "database",
+        }
 
     def _set_time_range(self, time_range: TimeRange) -> None:
         self.time_range = time_range
@@ -262,10 +324,11 @@ class MainWindow(QMainWindow):
 
     def _analysis_finished(self, result: AnalysisResult) -> None:
         self.result = result
-        self.risk_label.setText(f"风险: {self.result.risk_score}/100")
+        self.summary_label.setText(f"分析项: {len(self.result.summaries)} | 异常项: {len(self.result.alerts)}")
         self.source_panel.set_sources(self.result.sources)
-        self.overview.set_findings(self.result.findings)
-        self.apply_finding_filters()
+        self.overview.set_items(self._analysis_items())
+        self.apply_analysis_filters()
+        self.raw_log_table.set_events(self.result.events)
         self.timeline_view.set_timeline(self.result.timeline)
         self._populate_category_pages()
         self.analyze_btn.setEnabled(True)
@@ -281,32 +344,18 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "分析失败", message)
 
     def stop_analysis(self) -> None:
-        QMessageBox.information(self, "停止分析", "当前版本暂不支持强制停止正在运行的分析，请等待本次分析完成。")
+        QMessageBox.information(self, "停止分析", "已收到停止请求。当前版本暂不支持强制中断正在运行的分析，请等待本次分析完成。")
 
     def _populate_category_pages(self) -> None:
-        category_map = {
-            3: "Windows Login",
-            4: "Windows Bruteforce",
-            5: "RDP",
-            6: "Windows Privilege",
-            7: "Windows Service",
-            8: "Windows Task",
-            9: "PowerShell",
-            10: "Process",
-            11: "Defender",
-            12: "Log Tamper",
-            13: "Linux SSH",
-            14: "Linux Privilege",
-            15: "Linux User",
-            16: "Linux Persistence",
-            17: "Web",
-            18: "Database",
-        }
-        for index, category in category_map.items():
-            page = self.stack.widget(index)
-            table = getattr(page, "table", None)
-            if table:
-                table.set_findings([f for f in self.result.findings if category.lower() in f.category.lower() or category.lower() in f.title.lower()])
+        items = self._analysis_items()
+        for index, (category, table) in self.category_pages.items():
+            table.set_items(filter_analysis_items(items, category=category))
+
+    def _analysis_items(self) -> list[AlertItem | SummaryItem]:
+        severity_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+        alerts = sorted(self.result.alerts, key=lambda item: (severity_rank.get(item.severity, 9), -item.count))
+        summaries = sorted(self.result.summaries, key=lambda item: (-item.count, item.category))
+        return [*alerts, *summaries]
 
     def add_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "添加日志文件")
@@ -342,26 +391,31 @@ class MainWindow(QMainWindow):
                     self.user_paths = [entry["path"] for entry in self.user_path_entries if entry.get("enabled", True)]
                 break
 
-    def apply_finding_filters(self) -> None:
+    def apply_analysis_filters(self) -> None:
         severity = self.severity_filter.currentData() or self.severity_filter.currentText()
         category = self.category_filter.currentData() or self.category_filter.currentText()
         keyword = self.keyword_filter.text().strip()
-        visible = filter_findings(
-            self.result.findings,
+        visible = filter_analysis_items(
+            self._analysis_items(),
             None if severity == "all" else severity,
             None if category == "all" else category,
             keyword or None,
         )
-        self.overview.set_visible_findings(visible)
+        self.overview.set_visible_items(visible)
 
     def clear_results(self) -> None:
         self.result.findings.clear()
+        self.result.summaries.clear()
+        self.result.alerts.clear()
+        self.result.events.clear()
         self.result.timeline.clear()
         self.result.risk_score = 0
-        self.risk_label.setText("风险: 0/100")
-        self.overview.set_findings([])
+        self.summary_label.setText("分析项: 0 | 异常项: 0")
+        self.overview.set_items([])
+        self.raw_log_table.set_events([])
         self.timeline_view.set_timeline([])
-        self.detail.set_finding(None)
+        self.detail.set_item(None)
+        self._populate_category_pages()
 
     def save_session(self) -> None:
         session_id = SQLiteStorage().save_session(self.result)
@@ -369,5 +423,5 @@ class MainWindow(QMainWindow):
 
     def open_history(self) -> None:
         sessions = SQLiteStorage().list_sessions()
-        text = "\n".join(f"#{s['id']} {s['created_at']} 风险={s['risk_score']}" for s in sessions) or "暂无已保存会话。"
+        text = "\n".join(f"#{s['id']} {s['created_at']} 异常项={s.get('alert_count', 0)}" for s in sessions) or "暂无已保存会话。"
         QMessageBox.information(self, "历史会话", text)

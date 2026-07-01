@@ -42,6 +42,7 @@ from core.platform_utils import current_os
 from core.risk_score import RiskScorer
 from core.rule_engine import RuleEngine
 from core.stats import build_stats
+from core.summary_engine import build_analysis_items
 from core.time_range import TimeRange
 from core.timeline import build_timeline
 
@@ -112,6 +113,18 @@ class AnalysisEngine:
         result.timeline = build_timeline(result.events, result.findings)
         result.risk_score = self.risk_scorer.score(result.findings)
         result.stats = build_stats(result.events, result.findings)
+        result.summaries, result.alerts = build_analysis_items(result.events, result.findings)
+        result.stats.update(
+            {
+                "overview": {
+                    "source_count": len(result.sources),
+                    "event_count": len(result.events),
+                    "summary_count": len(result.summaries),
+                    "alert_count": len(result.alerts),
+                    "evidence_count": sum(len(item.evidence) for item in [*result.summaries, *result.alerts]),
+                }
+            }
+        )
         return result
 
     def _source_matches(self, source: LogSource, source_filter: str) -> bool:

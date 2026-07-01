@@ -35,7 +35,8 @@ class WindowsEventCollector(Collector):
             + 
             "$ErrorActionPreference='Stop';"
             f"$filter=@{{LogName='{source.channel}'; StartTime=[datetime]'{start}'; EndTime=[datetime]'{end}'}};"
-            "Get-WinEvent -FilterHashtable $filter -MaxEvents 2000 -ErrorAction Stop | Select-Object TimeCreated,Id,ProviderName,LogName,LevelDisplayName,Message | ConvertTo-Json -Compress"
+            "Get-WinEvent -FilterHashtable $filter -MaxEvents 2000 -ErrorAction Stop | "
+            "Select-Object TimeCreated,Id,ProviderName,LogName,LevelDisplayName,Message,@{Name='Xml';Expression={$_.ToXml()}} | ConvertTo-Json -Compress"
         )
         code, out, err = run_command(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], timeout=120)
         if code != 0:
@@ -76,7 +77,7 @@ class WindowsEventCollector(Collector):
             + 
             "$ErrorActionPreference='Stop';"
             f"Get-WinEvent -Path '{evtx_path}' -ErrorAction Stop | Where-Object {{$_.TimeCreated -ge [datetime]'{start}' -and $_.TimeCreated -le [datetime]'{end}'}} | "
-            "Select-Object TimeCreated,Id,ProviderName,LogName,LevelDisplayName,Message | ConvertTo-Json -Compress"
+            "Select-Object TimeCreated,Id,ProviderName,LogName,LevelDisplayName,Message,@{Name='Xml';Expression={$_.ToXml()}} | ConvertTo-Json -Compress"
         )
         code, out, err = run_command(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], timeout=180)
         if code != 0:
